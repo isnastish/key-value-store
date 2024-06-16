@@ -18,16 +18,16 @@ type Settings struct {
 	Addr string
 }
 
-var storage = NewStorage()
+var storage = newStorage()
 
-func NewStorage() *Storage {
+func newStorage() *Storage {
 	return &Storage{
 		data: make(map[string]map[string]string),
 	}
 }
 
 // If the key is the same, we override the data
-func (s *Storage) Put(hashkey, key, value string) {
+func (s *Storage) put(hashkey, key, value string) {
 	s.Lock()
 	defer s.Unlock()
 
@@ -41,7 +41,7 @@ func (s *Storage) Put(hashkey, key, value string) {
 	bucket[key] = value
 }
 
-func (s *Storage) Get(hashkey, key string) (string, error) {
+func (s *Storage) get(hashkey, key string) (string, error) {
 	s.RLock()
 	defer s.RUnlock()
 
@@ -58,7 +58,7 @@ func (s *Storage) Get(hashkey, key string) (string, error) {
 	return value, nil
 }
 
-func (s *Storage) Delete(hashkey, key string) bool {
+func (s *Storage) delete(hashkey, key string) bool {
 	s.Lock()
 	defer s.Unlock()
 
@@ -77,8 +77,7 @@ func (s *Storage) Delete(hashkey, key string) bool {
 	return false
 }
 
-// Check whether a key exists
-func (s *Storage) Head(hashkey, key string) bool {
+func (s *Storage) head(hashkey, key string) bool {
 	s.RLock()
 	defer s.RUnlock()
 
@@ -90,10 +89,10 @@ func (s *Storage) Head(hashkey, key string) bool {
 	return false
 }
 
-func GetHandler(w http.ResponseWriter, r *http.Request) {
+func getHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 
-	value, err := storage.Get(vars["hashkey"], vars["key"])
+	value, err := storage.get(vars["hashkey"], vars["key"])
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 	}
@@ -103,7 +102,7 @@ func GetHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(value))
 }
 
-func PutHandler(w http.ResponseWriter, r *http.Request) {
+func putHandler(w http.ResponseWriter, r *http.Request) {
 	data, err := io.ReadAll(r.Body)
 	defer r.Body.Close()
 
@@ -114,15 +113,15 @@ func PutHandler(w http.ResponseWriter, r *http.Request) {
 
 	// NOTE: If content-type is application/octet-stream, put binaries instead of a string
 	vars := mux.Vars(r)
-	storage.Put(vars["hashkey"], vars["key"], string(data))
+	storage.put(vars["hashkey"], vars["key"], string(data))
 
 	// return the status created error code
 	w.WriteHeader(http.StatusCreated)
 }
 
-func DeleteHandler(w http.ResponseWriter, r *http.Request) {
+func deleteHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
-	if storage.Delete(vars["hashkey"], vars["key"]) {
+	if storage.delete(vars["hashkey"], vars["key"]) {
 		w.Header().Add("deleted", "true")
 		return
 	}
@@ -131,9 +130,9 @@ func DeleteHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // Returns a metadata about the resource rather than a resource itself
-func HeadHandler(w http.ResponseWriter, r *http.Request) {
+func headHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
-	if storage.Head(vars["hashkey"], vars["key"]) {
+	if storage.head(vars["hashkey"], vars["key"]) {
 		w.Header().Add("exists", "true")
 		return
 	}
@@ -144,17 +143,17 @@ func HeadHandler(w http.ResponseWriter, r *http.Request) {
 func RunServer(settings *Settings) {
 	router := mux.NewRouter()
 
-	// echo endpoint
-	router.HandleFunc("/echo", func(w http.ResponseWriter, r *http.Request) {
+	router.HandleFunc("/v1/echo", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-	})
+		w.Write([]byte("Hello from KVS server!"))
+	}).Methods("GET")
 
 	// v1 is the version of the service
 	route := "/v1/{hashkey}/{key:[0-9A-Za-z]+}"
-	router.HandleFunc(route, GetHandler).Methods("GET")
-	router.HandleFunc(route, PutHandler).Methods("PUT")
-	router.HandleFunc(route, DeleteHandler).Methods("DELETE")
-	router.HandleFunc(route, HeadHandler).Methods("HEAD")
+	router.HandleFunc(route, getHandler).Methods("GET")
+	router.HandleFunc(route, putHandler).Methods("PUT")
+	router.HandleFunc(route, deleteHandler).Methods("DELETE")
+	router.HandleFunc(route, headHandler).Methods("HEAD")
 
 	fmt.Printf("Listening: %s\n", settings.Addr)
 
