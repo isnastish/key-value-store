@@ -1,6 +1,7 @@
 package kvs
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -56,8 +57,8 @@ func Client(settings *Settings) *client {
 	}
 }
 
-func (c *client) Hello() *ResultCmd {
-	resp, err := c.httpClient.Get(fmt.Sprintf("http://%s/v1/echo", c.settings.KvsEndpoint))
+func (c *client) Echo(ctx context.Context, val string) *ResultCmd {
+	resp, err := c.httpClient.Get(fmt.Sprintf("http://%s/v1/echo/%s", c.settings.KvsEndpoint, val))
 	if err != nil {
 		return NewResultCmd(fmt.Errorf("failed to make GET request %v", err))
 	}
@@ -72,4 +73,8 @@ func (c *client) Hello() *ResultCmd {
 		return NewResultCmd(fmt.Errorf("failed to read from response body %v", err))
 	}
 	return NewResultCmd(nil, string(result))
+}
+
+func (c *client) Set() {
+
 }

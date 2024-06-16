@@ -1,0 +1,8 @@
+# discard these files/directories 
+README.md
+/bin
+.vscode
+.git
+.gitignore
+.dockerignore
+Dockerfile

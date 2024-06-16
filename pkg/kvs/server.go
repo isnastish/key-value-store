@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"sync"
+	"unicode"
 
 	"github.com/gorilla/mux"
 )
@@ -143,9 +144,20 @@ func headHandler(w http.ResponseWriter, r *http.Request) {
 func RunServer(settings *Settings) {
 	router := mux.NewRouter()
 
-	router.HandleFunc("/v1/echo", func(w http.ResponseWriter, r *http.Request) {
+	router.HandleFunc("/v1/echo/{value}", func(w http.ResponseWriter, r *http.Request) {
+		vars := mux.Vars(r)
+		val := []rune(vars["value"])
+		for i := 0; i < len(val); i++ {
+			if unicode.IsLetter(val[i]) {
+				if unicode.IsLower(val[i]) {
+					val[i] = unicode.ToUpper(val[i])
+					continue
+				}
+				val[i] = unicode.ToLower(val[i])
+			}
+		}
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("Hello from KVS server!"))
+		w.Write([]byte(string(val)))
 	}).Methods("GET")
 
 	// v1 is the version of the service
