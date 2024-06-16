@@ -20,6 +20,7 @@ type Settings struct {
 }
 
 var storage = newStorage()
+var transactionLogger, _ = newFileTransactionsLogger("transactions_log.txt")
 
 func newStorage() *Storage {
 	return &Storage{
