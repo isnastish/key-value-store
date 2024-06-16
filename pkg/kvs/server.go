@@ -141,12 +141,29 @@ func headHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Add("exists", "false")
 }
 
+func incrHandler(w http.ResponseWriter, r *http.Request) {
+
+}
+
+func incrByHandler(w http.ResponseWriter, r *http.Request) {
+
+}
+
 func RunServer(settings *Settings) {
 	router := mux.NewRouter()
 
-	router.HandleFunc("/v1/echo/{value}", func(w http.ResponseWriter, r *http.Request) {
-		vars := mux.Vars(r)
-		val := []rune(vars["value"])
+	router.HandleFunc("/v1/echo", func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+
+		buf := make([]byte, r.ContentLength)
+		_, err := r.Body.Read(buf)
+
+		if err != nil && err != io.EOF {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		val := []rune(string(buf))
 		for i := 0; i < len(val); i++ {
 			if unicode.IsLetter(val[i]) {
 				if unicode.IsLower(val[i]) {
@@ -158,7 +175,7 @@ func RunServer(settings *Settings) {
 		}
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(string(val)))
-	}).Methods("GET")
+	}).Methods("PUT")
 
 	// v1 is the version of the service
 	route := "/v1/{hashkey}/{key:[0-9A-Za-z]+}"
@@ -166,6 +183,8 @@ func RunServer(settings *Settings) {
 	router.HandleFunc(route, putHandler).Methods("PUT")
 	router.HandleFunc(route, deleteHandler).Methods("DELETE")
 	router.HandleFunc(route, headHandler).Methods("HEAD")
+	router.HandleFunc("/v1/{key:[0-9A-Za-z]{256}}", incrHandler).Methods("PUT")
+	router.HandleFunc("/v1/{key:[0-9A-Za-z]{256}}/{count:[0-9\\-]+}", incrByHandler).Methods("PUT")
 
 	fmt.Printf("Listening: %s\n", settings.Addr)
 

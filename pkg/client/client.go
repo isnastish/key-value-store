@@ -1,26 +1,21 @@
 package kvs
 
 import (
+	"bytes"
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"net/http"
-	_ "net/url"
+	"net/url"
+	"strconv"
+	"time"
 )
 
 type Settings struct {
 	KvsEndpoint  string
 	RetriesCount uint
-}
-
-type baseResultCmd struct {
-	err error
-}
-
-type ResultCmd struct {
-	baseResultCmd
-
-	val string
+	TlsConfig    *tls.Config
 }
 
 type client struct {
@@ -28,23 +23,53 @@ type client struct {
 	httpClient *http.Client
 }
 
-func (r *baseResultCmd) Error() error {
-	return r.err
+type baseResult struct {
+	params []interface{}
+	err    error
 }
 
-func (r *ResultCmd) Value() string {
-	return r.val
+type StrResult struct {
+	baseResult
+	val string
 }
 
-func NewResultCmd(err error, args ...string) *ResultCmd {
-	var val string
-	if len(args) > 0 {
-		val = args[0]
+type IntResult struct {
+	baseResult
+	val int
+}
+
+type StatusResult struct {
+	baseResult
+	code   int
+	status string
+}
+
+func NewStatusResult(err error, code int, status string, cmdParams ...interface{}) *StatusResult {
+	return &StatusResult{
+		baseResult: baseResult{
+			params: cmdParams,
+			err:    err,
+		},
+		code:   code,
+		status: status,
 	}
+}
 
-	return &ResultCmd{
-		baseResultCmd: baseResultCmd{
-			err: err,
+func NewStrResult(err error, val string, cmdParams ...interface{}) *StrResult {
+	return &StrResult{
+		baseResult: baseResult{
+			params: cmdParams,
+			err:    err,
+		},
+		val: val,
+	}
+}
+
+func NewIntResult(err error, val int, cmdParams ...interface{}) *IntResult {
+	return &IntResult{
+		baseResult: baseResult{
+			params: cmdParams,
+			err:    err,
 		},
 		val: val,
 	}
@@ -52,29 +77,109 @@ func NewResultCmd(err error, args ...string) *ResultCmd {
 
 func Client(settings *Settings) *client {
 	return &client{
-		settings:   settings,
-		httpClient: &http.Client{},
+		settings: settings,
+		httpClient: &http.Client{
+			Timeout: time.Second * 10,
+		},
 	}
 }
 
-func (c *client) Echo(ctx context.Context, val string) *ResultCmd {
-	resp, err := c.httpClient.Get(fmt.Sprintf("http://%s/v1/echo/%s", c.settings.KvsEndpoint, val))
+func (b *baseResult) Err() error {
+	return b.err
+}
+
+func (s *StrResult) Val() string {
+	return s.val
+}
+
+func (c *client) Echo(ctx context.Context, val string) *StrResult {
+	params := make([]interface{}, 2)
+	params[0] = "Echo"
+	params[1] = val
+
+	url, err := url.Parse(fmt.Sprintf("http://%s/v1/echo", c.settings.KvsEndpoint))
 	if err != nil {
-		return NewResultCmd(fmt.Errorf("failed to make GET request %v", err))
+		return NewStrResult(err, "", params...)
 	}
 
-	if resp.StatusCode != http.StatusOK {
-		return NewResultCmd(fmt.Errorf("status code %s", resp.Status))
+	req, err := http.NewRequestWithContext(ctx, "PUT", url.String(), bytes.NewBufferString(val))
+	if err != nil {
+		return NewStrResult(err, "", params...)
 	}
 
+	req.Header.Set("User-Agent", "kvs-client")
+	req.Header.Set("Content-Length", strconv.Itoa((len(val))))
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return NewStrResult(err, "", params...)
+	}
+
+	if resp.StatusCode == http.StatusInternalServerError {
+		return NewStrResult(fmt.Errorf("%s %d", resp.Status, resp.StatusCode), "", params...)
+	}
+
+	// TODO: Handle response code
 	defer resp.Body.Close()
-	result, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return NewResultCmd(fmt.Errorf("failed to read from response body %v", err))
+		return NewStrResult(err, "", params...)
 	}
-	return NewResultCmd(nil, string(result))
+
+	return NewStrResult(nil, string(body), params...)
 }
 
-func (c *client) Set() {
+func (c *client) Put(ctx context.Context, key string, val string) *IntResult {
+	params := make([]interface{}, 3)
+	params[0] = "Put"
+	params[1] = key
+	params[2] = val
 
+	url, err := url.Parse(fmt.Sprintf("http://%s/v1/%s", c.settings.KvsEndpoint, key))
+	if err != nil {
+		return NewIntResult(err, -1, params...)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "PUT", url.String(), bytes.NewBufferString(val))
+	if err != nil {
+		return NewIntResult(err, -1, params...)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return NewIntResult(err, -1, params...)
+	}
+
+	return NewIntResult(nil, resp.StatusCode, params...)
+}
+
+func (c *client) Del(ctx context.Context, key string) *IntResult {
+	params := make([]interface{}, 2)
+	params[0] = "Del"
+	params[1] = key
+
+	url, err := url.Parse(fmt.Sprintf("http://%s/v1/%s", c.settings.KvsEndpoint, key))
+	if err != nil {
+		return NewIntResult(err, -1, params...)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "DELETE", url.String(), nil)
+	if err != nil {
+		return NewIntResult(err, -1, params...)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return NewIntResult(err, -1, params...)
+	}
+
+	return NewIntResult(nil, resp.StatusCode, params...)
+}
+
+func (c *client) Incr(ctx context.Context, key string) *IntResult {
+	return nil
+}
+
+func (c *client) IncrBy(ctx context.Context, key string, val int) *IntResult {
+	return nil
 }
