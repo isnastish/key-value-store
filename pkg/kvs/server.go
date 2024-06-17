@@ -10,9 +10,55 @@ import (
 	"github.com/gorilla/mux"
 )
 
-type Storage struct {
+// TODO: Make a set store (storage of unique identifiers)
+// If PUT method is issued and the value already exists, 
+// we shouldn't append a it.
+// Support deletion as well.
+// Make it sorted? 
+
+type I64Store struct {
+	data map[string]int64
+	sync.RWMutex
+}
+
+type U64Store struct {
+	data map[string]uint64	
+	sync.RWMutex
+}
+
+type F64Store struct {
+	data map[string]Float
+}
+
+type StrStore struct {
+	data map[string]string
+	sync.RWMutex
+}
+
+type SliceStore struct {
+	data map[string][]string
+	sync.RWMutex
+}
+
+type MapStore struct {
 	data map[string]map[string]string
 	sync.RWMutex
+}
+
+func newMapStorage() (*MapStore) {
+	return &MapStore{
+		data: make(),
+	}
+}
+
+func newMapStorage() (*MapStore) {
+
+}
+
+func newStrStorage() (*StrStorage) {
+	return &StrStorage{
+		data: make(map[string]string),
+	}
 }
 
 type Settings struct {
@@ -24,7 +70,8 @@ var transactionLogger, _ = newFileTransactionsLogger("transactions_log.txt")
 
 func newStorage() *Storage {
 	return &Storage{
-		data: make(map[string]map[string]string),
+		hashmaps: make(map[string]map[string]string),
+		strs:     make(map[string]string),
 	}
 }
 
@@ -142,8 +189,15 @@ func headHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Add("exists", "false")
 }
 
+// TODO: Try out the request timeout on the client
+// Model the scenario when the server receives the requests but hangs for 20s before returning the response.
+// Request timeout should be less than that.
+// Incr should put a new value if it doesn't exist already.
 func incrHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	key := vars["key"]
 
+	value, exists := 
 }
 
 func incrByHandler(w http.ResponseWriter, r *http.Request) {

@@ -48,11 +48,49 @@ func (l *FileTransactionLogger) writeDeleteTransaction(key string) {
 	l.events <- Event{id: l.id, kind: EventKindDelete, key: key, time: time.Now()}
 }
 
-func (l *FileTransactionLogger) processEvents() {
-	events := make(chan Event, 16)
-	l.events = events
+func (l *FileTransactionLogger) writeEvents() {
+	events := make(chan Event, 64) // Why the channel is buffered?
+	errors := make(chan error, 64)
 
-	for _, event := range events {
-		// Write an event to a file
-	}
+	l.events = events
+	l.errors = errors
+
+	go func() {
+		// Event format
+		//    {
+		//    	id: 0;
+		//    	kind: EventKindPut;
+		//    	key: "key";
+		//    	value: "value" | e;
+		//    	time: time;
+		//    },
+		// TODO: Figure out the format for uint64
+		// for event := range events {
+		// 	l.id++
+
+		// 	_, err := fmt.Fprintf(l.file,
+		// 		"{\n"+
+		// 			"\tid: %d;\n"+
+		// 			"\tkind: %s;\n"+
+		// 			"\tkey: %s;\n"+
+		// 			"\tvalue: %s;\n",
+		// 		"\ttime: %s;\n"+
+		// 			"},\n",
+		// 		event.id,
+		// 		eventKind2Str(event.kind),
+		// 		event.key,
+		// 		event.value,
+		// 		event.time.Format(time.DateTime),
+		// 	)
+
+		// 	if err != nil {
+		// 		errors <- err
+		// 		return
+		// 	}
+		// }
+	}()
 }
+
+// func (l *FileTransactionLogger) readEvents() (<-chan Event, <-chan error) {
+
+// }
