@@ -176,6 +176,55 @@ func (c *client) Del(ctx context.Context, key string) *IntResult {
 	return NewIntResult(nil, resp.StatusCode, params...)
 }
 
+func (c *client) SPut(ctx context.Context, key string, val string) *StatusResult {
+	return nil
+}
+
+func (c *client) SGet(ctx context.Context, key string) *StrResult {
+	return nil
+}
+
+func (c *client) SDel(ctx context.Context, key string) *StatusResult {
+	return nil
+}
+
+// TODO: Return map result
+func (c *client) HMPut(ctx context.Context, hash string, m map[string]string) {
+
+}
+
+func (c *client) HMGet(ctx context.Context, hash string) *StatusResult {
+	return nil
+}
+
+func (c *client) HMDel(ctx context.Context, hash string) *StatusResult {
+	return nil
+}
+
+func (c *client) SlPut(ctx context.Context, hash string, args ...string) {
+
+}
+
+func (c *client) SlGet(ctx context.Context, key string) {
+
+}
+
+func (c *client) SlDel(ctx context.Context, key string) {
+
+}
+
+func (c *client) IPut(ctx context.Context, key string) *StatusResult {
+	return nil
+}
+
+func (c *client) IGet(ctx context.Context, key string) *IntResult {
+	return nil
+}
+
+func (c *client) IDel(ctx context.Context, key string) *StatusResult {
+	return nil
+}
+
 func (c *client) Incr(ctx context.Context, key string) *IntResult {
 	return nil
 }
@@ -183,3 +232,7 @@ func (c *client) Incr(ctx context.Context, key string) *IntResult {
 func (c *client) IncrBy(ctx context.Context, key string, val int) *IntResult {
 	return nil
 }
+
+// client.FPut()
+// client.FGet()
+// client.FDel()
