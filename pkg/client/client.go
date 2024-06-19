@@ -4,235 +4,364 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/json"
+	_ "encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
-	"strconv"
-	"time"
 )
 
+type IntCommandCallback func(c *Client, ctx context.Context, cmd *IntCmd) *IntCmd
+type StringCommandCallback func(c *Client, ctx context.Context, cmd *StrCmd) *StrCmd
+type MapCommandCallback func(c *Client, ctx context.Context, cmd *MapCmd) *MapCmd
+
 type Settings struct {
-	KvsEndpoint  string
+	Endpoint     string
 	RetriesCount uint
 	TlsConfig    *tls.Config
 }
 
-type client struct {
+type Client struct {
 	settings   *Settings
 	httpClient *http.Client
+	baseURL    *url.URL
 }
 
-type baseResult struct {
-	params []interface{}
-	err    error
+type baseCmd struct {
+	name string
+	args []interface{}
+	err  error
 }
 
-type StrResult struct {
-	baseResult
-	val string
+type MapCmd struct {
+	baseCmd
+	result map[string]string
 }
 
-type IntResult struct {
-	baseResult
-	val int
+type IntCmd struct {
+	baseCmd
+	result int
 }
 
-type StatusResult struct {
-	baseResult
-	code   int
-	status string
+type StrCmd struct {
+	baseCmd
+	result string
 }
 
-func NewStatusResult(err error, code int, status string, cmdParams ...interface{}) *StatusResult {
-	return &StatusResult{
-		baseResult: baseResult{
-			params: cmdParams,
-			err:    err,
-		},
-		code:   code,
-		status: status,
+// BoolCmd will be used for sets to check whether they contain members,
+// maybe even for maps as well.
+type BoolCmd struct {
+	baseCmd
+	result bool
+}
+
+type CmdGroup struct {
+	intCbtable map[string]IntCommandCallback
+	strCbtable map[string]StringCommandCallback
+	mapCbtable map[string]MapCommandCallback
+}
+
+var cmdgroup *CmdGroup
+
+func newCmdGroup() *CmdGroup {
+	return &CmdGroup{
+		intCbtable: make(map[string]IntCommandCallback),
+		strCbtable: make(map[string]StringCommandCallback),
+		mapCbtable: make(map[string]MapCommandCallback),
 	}
 }
 
-func NewStrResult(err error, val string, cmdParams ...interface{}) *StrResult {
-	return &StrResult{
-		baseResult: baseResult{
-			params: cmdParams,
-			err:    err,
-		},
-		val: val,
+func init() {
+	cmdgroup = newCmdGroup()
+
+	cmdgroup.intCbtable["intget"] = intGetCommand
+	cmdgroup.intCbtable["intput"] = intPutCommand
+	cmdgroup.intCbtable["intdel"] = intDelCommand
+	cmdgroup.intCbtable["strput"] = stringPutCommand
+	cmdgroup.intCbtable["strdel"] = stringDelCommand
+	cmdgroup.intCbtable["mapdel"] = mapDelCommand
+	cmdgroup.intCbtable["mapput"] = mapPutCommand
+
+	cmdgroup.strCbtable["strget"] = stringGetCommand
+	cmdgroup.strCbtable["echo"] = echoCommand
+	cmdgroup.strCbtable["hello"] = helloCommand
+
+	cmdgroup.mapCbtable["mapget"] = mapGetCommand
+}
+
+func NewClient(settings *Settings) *Client {
+	baseURL, _ := url.Parse(fmt.Sprintf("http://%s/", settings.Endpoint))
+	return &Client{
+		settings:   settings,
+		httpClient: &http.Client{},
+		baseURL:    baseURL,
 	}
 }
 
-func NewIntResult(err error, val int, cmdParams ...interface{}) *IntResult {
-	return &IntResult{
-		baseResult: baseResult{
-			params: cmdParams,
-			err:    err,
-		},
-		val: val,
-	}
+func newMapCmd(name string, args ...interface{}) *MapCmd {
+	return &MapCmd{baseCmd: baseCmd{name: name, args: args}}
 }
 
-func Client(settings *Settings) *client {
-	return &client{
-		settings: settings,
-		httpClient: &http.Client{
-			Timeout: time.Second * 10,
-		},
-	}
+func newStrCmd(name string, args ...interface{}) *StrCmd {
+	return &StrCmd{baseCmd: baseCmd{name: name, args: args}}
 }
 
-func (b *baseResult) Err() error {
+func newBoolCmd(name string, args ...interface{}) *BoolCmd {
+	return &BoolCmd{baseCmd: baseCmd{name: name, args: args}}
+}
+
+func newIntCmd(name string, args ...interface{}) *IntCmd {
+	return &IntCmd{baseCmd: baseCmd{name: name, args: args}}
+}
+
+func (c *Client) Echo(ctx context.Context, val string) *StrCmd {
+	args := make([]interface{}, 1)
+	args[1] = val
+
+	cmd := newStrCmd("echo", args)
+	_ = cmdgroup.strCbtable[cmd.name](c, ctx, cmd)
+
+	return cmd
+}
+
+func (c *Client) Hello(ctx context.Context) *StrCmd {
+	cmd := newStrCmd("hello")
+	_ = cmdgroup.strCbtable[cmd.name](c, ctx, cmd)
+	return cmd
+}
+
+func (c *Client) StrGet(ctx context.Context, key string) *StrCmd {
+	args := make([]interface{}, 1)
+	args[0] = key
+
+	cmd := newStrCmd("strget")
+	_ = cmdgroup.strCbtable[cmd.name](c, ctx, cmd)
+
+	return cmd
+}
+
+func (c *Client) StrPut(ctx context.Context, key string, val string) *IntCmd {
+	args := make([]interface{}, 2)
+	args[0] = key
+	args[1] = val
+
+	cmd := newIntCmd("strput", args...)
+	_ = cmdgroup.intCbtable[cmd.name](c, ctx, cmd)
+
+	return cmd
+}
+
+func (c *Client) StrDel(ctx context.Context, key string) *IntCmd {
+	args := make([]interface{}, 1)
+	args[0] = key
+
+	cmd := newIntCmd("strdel", args...)
+	_ = cmdgroup.intCbtable[cmd.name](c, ctx, cmd)
+
+	return cmd
+}
+
+func (c *Client) IntGet(ctx context.Context, key string) *IntCmd {
+	args := make([]interface{}, 1)
+	args[0] = key
+
+	cmd := newIntCmd("intget", args...)
+	_ = cmdgroup.intCbtable[cmd.name](c, ctx, cmd)
+
+	return cmd
+}
+
+func (c *Client) IntPut(ctx context.Context, key string, val int) *IntCmd {
+	args := make([]interface{}, 2)
+	args[0] = key
+	args[1] = val
+
+	cmd := newIntCmd("intput", args...)
+	_ = cmdgroup.intCbtable[cmd.name](c, ctx, cmd)
+
+	return cmd
+}
+
+func (c *Client) IntDel(ctx context.Context, key string) *IntCmd {
+	args := make([]interface{}, 2)
+	args[0] = key
+
+	cmd := newIntCmd("intdel", args...)
+	_ = cmdgroup.intCbtable[cmd.name](c, ctx, cmd)
+
+	return cmd
+}
+
+// Pass an interface?
+// Support []string
+// map[string]string
+// map[string]interface{} (for POD types)
+// {key, value}, {key, value}, {key, value} pairs
+func (c *Client) MapGet(ctx context.Context, key string, val map[string]string) *MapCmd {
+	args := make([]interface{}, 2)
+	args[0] = key
+	args[1] = val
+
+	cmd := newMapCmd("mapget", args...)
+	_ = cmdgroup.mapCbtable[cmd.name](c, ctx, cmd)
+
+	return cmd
+}
+
+func (c *Client) MapPut(ctx context.Context, key string) *IntCmd {
+	args := make([]interface{}, 1)
+	args[0] = key
+
+	cmd := newIntCmd("mapput", args...)
+	_ = cmdgroup.intCbtable[cmd.name](c, ctx, cmd)
+
+	return cmd
+}
+
+func (c *Client) MapDel(ctx context.Context, key string) *IntCmd {
+	args := make([]interface{}, 1)
+	args[0] = key
+
+	cmd := newIntCmd("mapdel", args...)
+	_ = cmdgroup.intCbtable[cmd.name](c, ctx, cmd)
+
+	return cmd
+}
+
+func (b *baseCmd) Err() error {
 	return b.err
 }
 
-func (s *StrResult) Val() string {
-	return s.val
+func helloCommand(c *Client, ctx context.Context, cmd *StrCmd) *StrCmd {
+	return nil
 }
 
-func (c *client) Echo(ctx context.Context, val string) *StrResult {
-	params := make([]interface{}, 2)
-	params[0] = "Echo"
-	params[1] = val
-
-	url, err := url.Parse(fmt.Sprintf("http://%s/v1/echo", c.settings.KvsEndpoint))
+func echoCommand(c *Client, ctx context.Context, cmd *StrCmd) *StrCmd {
+	val := cmd.args[0].(string)
+	url := fmt.Sprintf("http://%s/%s", c.settings.Endpoint, cmd.name)
+	req, err := http.NewRequestWithContext(ctx, "PUT", url, bytes.NewBufferString(val))
 	if err != nil {
-		return NewStrResult(err, "", params...)
+		cmd.err = err
+		return cmd
 	}
-
-	req, err := http.NewRequestWithContext(ctx, "PUT", url.String(), bytes.NewBufferString(val))
-	if err != nil {
-		return NewStrResult(err, "", params...)
-	}
-
-	req.Header.Set("User-Agent", "kvs-client")
-	req.Header.Set("Content-Length", strconv.Itoa((len(val))))
-
+	req.Header.Add("Content-Length", fmt.Sprintf("%d", len(val)))
+	req.Header.Add("Content-Type", "text/plain")
+	req.Header.Add("User-Agent", "kvs-client")
 	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return NewStrResult(err, "", params...)
-	}
-
-	if resp.StatusCode == http.StatusInternalServerError {
-		return NewStrResult(fmt.Errorf("%s %d", resp.Status, resp.StatusCode), "", params...)
-	}
-
-	// TODO: Handle response code
+	if err != nil && err != io.EOF {
+		cmd.err = err
+		return cmd
+	} // TODO: Handle resp.Status != 200
+	bytes, _ := io.ReadAll(resp.Body)
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return NewStrResult(err, "", params...)
-	}
-
-	return NewStrResult(nil, string(body), params...)
+	cmd.result = string(bytes)
+	return cmd
 }
 
-func (c *client) Put(ctx context.Context, key string, val string) *IntResult {
-	params := make([]interface{}, 3)
-	params[0] = "Put"
-	params[1] = key
-	params[2] = val
+func stringGetCommand(c *Client, ctx context.Context, cmd *StrCmd) *StrCmd {
+	return nil
+}
 
-	url, err := url.Parse(fmt.Sprintf("http://%s/v1/%s", c.settings.KvsEndpoint, key))
-	if err != nil {
-		return NewIntResult(err, -1, params...)
+func stringPutCommand(c *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
+	return nil
+}
+
+func stringDelCommand(c *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
+	return nil
+}
+
+func intGetCommand(c *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
+	return nil
+}
+
+func intPutCommand(c *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
+	return nil
+}
+
+func intDelCommand(c *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
+	return nil
+}
+
+func mapGetCommand(c *Client, ctx context.Context, cmd *MapCmd) *MapCmd {
+	key := cmd.args[0].(string)
+	url := c.baseURL.JoinPath(key)
+	result := makeRequest(c, ctx, "GET", url.String(), nil)
+	if result.err != nil {
+		cmd.err = result.err
+		return cmd
 	}
-
-	req, err := http.NewRequestWithContext(ctx, "PUT", url.String(), bytes.NewBufferString(val))
+	val := make(map[string]string)
+	err := json.Unmarshal(result.contents, &val)
 	if err != nil {
-		return NewIntResult(err, -1, params...)
+		cmd.err = err
+		return cmd
 	}
+	cmd.result = val
+	return cmd
+}
 
+func mapPutCommand(c *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
+	key := cmd.args[0].(string)
+	hashmap := cmd.args[1].(map[string]string)
+	data, err := json.Marshal(hashmap)
+	url := c.baseURL.JoinPath(key)
+	result := makeRequest(c, ctx, "PUT", url.String(), bytes.NewBuffer(data))
+	if result.err != nil {
+		cmd.err = err
+		return cmd
+	}
+	return cmd
+}
+
+func mapDelCommand(c *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
+	key := cmd.args[0].(string)
+	url := c.baseURL.JoinPath(key)
+	result := makeRequest(c, ctx, "DELETE", url.String(), nil)
+	if result.err != nil {
+		cmd.err = result.err
+	}
+	cmd.result = result.code
+	return cmd
+}
+
+type makeReqResult struct {
+	status   string
+	code     int
+	contents []byte
+	err      error
+}
+
+// PUT | GET | DELETE
+func makeRequest(c *Client, ctx context.Context, method string, URL string, contents *bytes.Buffer) *makeReqResult {
+	result := &makeReqResult{}
+	netURL, err := url.Parse(URL)
+	if err != nil {
+		result.err = err
+		return result
+	}
+	req, err := http.NewRequestWithContext(ctx, method, netURL.String(), contents)
+	if err != nil {
+		result.err = err
+		return result
+	}
+	if method == "PUT" {
+		req.Header.Add("Content-Length", fmt.Sprintf("%d", contents.Len()))
+		req.Header.Add("Content-Type", "text/plain") // should be application/json for a map
+	}
+	req.Header.Add("User-Agent", "kvs-client")
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return NewIntResult(err, -1, params...)
+		result.err = err
+		return result
 	}
-
-	return NewIntResult(nil, resp.StatusCode, params...)
-}
-
-func (c *client) Del(ctx context.Context, key string) *IntResult {
-	params := make([]interface{}, 2)
-	params[0] = "Del"
-	params[1] = key
-
-	url, err := url.Parse(fmt.Sprintf("http://%s/v1/%s", c.settings.KvsEndpoint, key))
-	if err != nil {
-		return NewIntResult(err, -1, params...)
+	if method == "GET" {
+		bytes, err := io.ReadAll(resp.Body)
+		defer resp.Body.Close()
+		result.err = err
+		result.contents = bytes
 	}
-
-	req, err := http.NewRequestWithContext(ctx, "DELETE", url.String(), nil)
-	if err != nil {
-		return NewIntResult(err, -1, params...)
-	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return NewIntResult(err, -1, params...)
-	}
-
-	return NewIntResult(nil, resp.StatusCode, params...)
+	result.status = resp.Status
+	result.code = resp.StatusCode
+	return result
 }
-
-func (c *client) SPut(ctx context.Context, key string, val string) *StatusResult {
-	return nil
-}
-
-func (c *client) SGet(ctx context.Context, key string) *StrResult {
-	return nil
-}
-
-func (c *client) SDel(ctx context.Context, key string) *StatusResult {
-	return nil
-}
-
-// TODO: Return map result
-func (c *client) HMPut(ctx context.Context, hash string, m map[string]string) {
-
-}
-
-func (c *client) HMGet(ctx context.Context, hash string) *StatusResult {
-	return nil
-}
-
-func (c *client) HMDel(ctx context.Context, hash string) *StatusResult {
-	return nil
-}
-
-func (c *client) SlPut(ctx context.Context, hash string, args ...string) {
-
-}
-
-func (c *client) SlGet(ctx context.Context, key string) {
-
-}
-
-func (c *client) SlDel(ctx context.Context, key string) {
-
-}
-
-func (c *client) IPut(ctx context.Context, key string) *StatusResult {
-	return nil
-}
-
-func (c *client) IGet(ctx context.Context, key string) *IntResult {
-	return nil
-}
-
-func (c *client) IDel(ctx context.Context, key string) *StatusResult {
-	return nil
-}
-
-func (c *client) Incr(ctx context.Context, key string) *IntResult {
-	return nil
-}
-
-func (c *client) IncrBy(ctx context.Context, key string, val int) *IntResult {
-	return nil
-}
-
-// client.FPut()
-// client.FGet()
-// client.FDel()

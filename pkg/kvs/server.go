@@ -2,6 +2,7 @@ package kvs
 
 import (
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -227,15 +228,18 @@ var mapStorage = newMapStorage()
 // }
 // NOTE: Storage can be made as an interface
 
-func (m *MapStore) put() {
-
+func (s *MapStore) put(hashKey string, m map[string]string) error {
+	s.Lock()
+	s.data[hashKey] = m
+	s.Unlock()
+	return nil
 }
 
-func (m *MapStore) get() (map[string]string, error) {
+func (s *MapStore) get() (map[string]string, error) {
 	return nil, nil
 }
 
-func (m *MapStore) del() {
+func (s *MapStore) del() {
 
 }
 
@@ -319,7 +323,9 @@ func mapStorePutHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	hashKey := vars["hashkey"]
 
-	pairs, err := io.ReadAll(r.Body)
+	// Check the Content-Length first?
+	// The body should contain key-value pairs, separated by a colon
+	body, err := io.ReadAll(r.Body)
 	defer r.Body.Close()
 
 	if err != nil {
@@ -327,40 +333,76 @@ func mapStorePutHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_ = hashKey
-	_ = pairs
+	hashMap := make(map[string]string)
+
+	err = json.Unmarshal(body, &hashMap)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	fmt.Println("hashMap ", hashMap)
+
+	err = mapStorage.put(hashKey, hashMap)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
 }
 
-// router.HandleFunc(mapRoute, mapStoreGetHandler)
-// router.HandleFunc(mapRoute, mapStoreDeleteHandler)
+func mapStoreGetHandler(w http.ResponseWriter, r *http.Request) {
+
+}
+
+func mapStoreDeleteHandler(w http.ResponseWriter, r *http.Request) {
+
+}
+
+func echoHandler(w http.ResponseWriter, r *http.Request) {
+	buf, err := io.ReadAll(r.Body)
+	defer r.Body.Close()
+
+	if err != nil && err != io.EOF {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Convert lowercase letters into uppercase letters and vice-versa
+	val := []rune(string(buf))
+	for i := 0; i < len(val); i++ {
+		if unicode.IsLetter(val[i]) {
+			if unicode.IsLower(val[i]) {
+				val[i] = unicode.ToUpper(val[i])
+				continue
+			}
+			val[i] = unicode.ToLower(val[i])
+		}
+	}
+
+	w.Header().Add("Content-Type", "text/plain")
+	w.Header().Add("Content-Length", fmt.Sprint(len(val)))
+
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(string(val)))
+}
+
+func helloHandler(w http.ResponseWriter, r *http.Request) {
+	const helloStr = "Hello from KVS server"
+
+	w.Header().Add("Content-Type", "text/plain")
+	w.Header().Add("Content-Length", fmt.Sprint(len(helloStr)))
+
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(helloStr))
+}
 
 func RunServer(settings *Settings) {
 	router := mux.NewRouter()
 
-	router.HandleFunc("/v1/echo", func(w http.ResponseWriter, r *http.Request) {
-		defer r.Body.Close()
-
-		buf := make([]byte, r.ContentLength)
-		_, err := r.Body.Read(buf)
-
-		if err != nil && err != io.EOF {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		val := []rune(string(buf))
-		for i := 0; i < len(val); i++ {
-			if unicode.IsLetter(val[i]) {
-				if unicode.IsLower(val[i]) {
-					val[i] = unicode.ToUpper(val[i])
-					continue
-				}
-				val[i] = unicode.ToLower(val[i])
-			}
-		}
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(string(val)))
-	}).Methods("PUT")
+	router.HandleFunc("/v1/echo", echoHandler).Methods("PUT")
+	router.HandleFunc("/v1/hello", helloHandler).Methods("GET")
 
 	// v1 is the version of the service
 	// route := "/v1/{hashkey}/{key:[0-9A-Za-z]+}"
@@ -373,8 +415,8 @@ func RunServer(settings *Settings) {
 
 	mapRoute := "/v1/mapstore/{hashkey:[0-9A-Za-z]+}"
 	router.HandleFunc(mapRoute, mapStorePutHandler)
-	// router.HandleFunc(mapRoute, mapStoreGetHandler)
-	// router.HandleFunc(mapRoute, mapStoreDeleteHandler)
+	router.HandleFunc(mapRoute, mapStoreGetHandler)
+	router.HandleFunc(mapRoute, mapStoreDeleteHandler)
 
 	strRoute := "/v1/strstore/{key:[0-9A-Za-z]+}"
 	router.HandleFunc(strRoute, strStorePutHandler)
