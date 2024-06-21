@@ -183,7 +183,7 @@ func (s *FloatStore) get(key string) *cmdResult {
 	val, exists := s.data[key]
 	s.Unlock()
 	if !exists {
-		return &cmdResult{err: errorf("Key %d not found in floats storage", key)}
+		return &cmdResult{err: errorf("Key %s not found in floats storage", key)}
 	}
 	return &cmdResult{val: val}
 }
@@ -217,7 +217,7 @@ func (store *CommonStore) stringPutHandler(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	w.WriteHeader(http.StatusCreated)
-	store.txnLogger.writePutTransaction(key, string(val))
+	store.txnLogger.writePutEvent(key, string(val))
 }
 
 func (store *CommonStore) stringGetHandler(w http.ResponseWriter, r *http.Request) {
@@ -235,7 +235,7 @@ func (store *CommonStore) stringGetHandler(w http.ResponseWriter, r *http.Reques
 
 	w.WriteHeader(http.StatusOK)
 	w.Write(bytes)
-	store.txnLogger.writeGetTransaction(key)
+	store.txnLogger.writeGetEvent(key)
 }
 
 func (store *CommonStore) stringDeleteHandler(w http.ResponseWriter, r *http.Request) {
@@ -251,7 +251,7 @@ func (store *CommonStore) stringDeleteHandler(w http.ResponseWriter, r *http.Req
 		w.Header().Add("Deleted", "true")
 	}
 	w.WriteHeader(http.StatusNoContent)
-	store.txnLogger.writeDeleteTransaction(key)
+	store.txnLogger.writeDeleteEvent(key)
 }
 
 func (store *CommonStore) mapPutHandler(w http.ResponseWriter, r *http.Request) {
@@ -276,7 +276,7 @@ func (store *CommonStore) mapPutHandler(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	w.WriteHeader(http.StatusCreated)
-	store.txnLogger.writePutTransaction(hashKey, hashMap)
+	store.txnLogger.writePutEvent(hashKey, hashMap)
 }
 
 func (store *CommonStore) mapGetHandler(w http.ResponseWriter, r *http.Request) {
@@ -288,7 +288,7 @@ func (store *CommonStore) mapGetHandler(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, res.err.Error(), http.StatusInternalServerError)
 		return
 	}
-	store.txnLogger.writeGetTransaction(hashKey)
+	store.txnLogger.writeGetEvent(hashKey)
 	bytes, err := json.Marshal(res.val)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -315,7 +315,7 @@ func (store *CommonStore) mapDeleteHandler(w http.ResponseWriter, r *http.Reques
 	}
 	// TODO: Document this in the architecture manual
 	w.WriteHeader(http.StatusNoContent)
-	store.txnLogger.writeDeleteTransaction(hashKey)
+	store.txnLogger.writeDeleteEvent(hashKey)
 }
 
 func (store *CommonStore) intPutHandler(w http.ResponseWriter, r *http.Request) {
@@ -336,7 +336,7 @@ func (store *CommonStore) intPutHandler(w http.ResponseWriter, r *http.Request) 
 	store.ints.put(key, val) // omitted
 	w.WriteHeader(http.StatusCreated)
 
-	store.txnLogger.writePutTransaction(key, val)
+	store.txnLogger.writePutEvent(key, val)
 }
 
 func (store *CommonStore) intGetHandler(w http.ResponseWriter, r *http.Request) {
@@ -353,7 +353,7 @@ func (store *CommonStore) intGetHandler(w http.ResponseWriter, r *http.Request) 
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(fmt.Sprintf("%d", res.val)))
 
-	store.txnLogger.writeGetTransaction(key)
+	store.txnLogger.writeGetEvent(key)
 }
 
 func (store *CommonStore) intDeleteHandler(w http.ResponseWriter, r *http.Request) {
@@ -369,7 +369,7 @@ func (store *CommonStore) intDeleteHandler(w http.ResponseWriter, r *http.Reques
 		w.Header().Add("Deleted", "true")
 	}
 	w.WriteHeader(http.StatusNoContent)
-	store.txnLogger.writeDeleteTransaction(key)
+	store.txnLogger.writeDeleteEvent(key)
 }
 
 func (store *CommonStore) floatGetHandler(w http.ResponseWriter, r *http.Request) {
@@ -386,7 +386,7 @@ func (store *CommonStore) floatGetHandler(w http.ResponseWriter, r *http.Request
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(fmt.Sprintf("%d", res.val)))
 
-	store.txnLogger.writeGetTransaction(key)
+	store.txnLogger.writeGetEvent(key)
 }
 
 func (store *CommonStore) floatPutHandler(w http.ResponseWriter, r *http.Request) {
@@ -406,7 +406,7 @@ func (store *CommonStore) floatPutHandler(w http.ResponseWriter, r *http.Request
 	}
 	store.floats.put(key, float32(val))
 	w.WriteHeader(http.StatusCreated)
-	store.txnLogger.writePutTransaction(key, val)
+	store.txnLogger.writePutEvent(key, val)
 }
 
 func (store *CommonStore) floatDeleteHandler(w http.ResponseWriter, r *http.Request) {
@@ -423,7 +423,7 @@ func (store *CommonStore) floatDeleteHandler(w http.ResponseWriter, r *http.Requ
 		w.Header().Add("Deleted", "true")
 	}
 	w.WriteHeader(http.StatusNoContent)
-	store.txnLogger.writeDeleteTransaction(key)
+	store.txnLogger.writeDeleteEvent(key)
 }
 
 func (store *CommonStore) echoHandler(w http.ResponseWriter, r *http.Request) {
@@ -465,6 +465,8 @@ type Settings struct {
 	Endpoint    string
 	CertPemFile string
 	KeyPemFile  string
+	Username    string
+	Password    string
 }
 
 func RunServer(settings *Settings) {
