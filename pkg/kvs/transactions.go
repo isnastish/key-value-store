@@ -1,17 +1,18 @@
-// TODO: Write data in a binary format
 package kvs
 
 import (
+	"context"
 	"os"
 	"time"
 )
 
 type TransactionLogger interface {
-	writePutTransaction()
-	writeGetTransaction()
-	writeDeleteTransaction()
+	writePutTransaction(key string, val interface{})
+	writeGetTransaction(key string)
+	writeDeleteTransaction(key string)
 
-	// Add a function which reads transactions
+	processEvents(ctx context.Context)
+	readSavedEvents() (<-chan Event, <-chan error)
 }
 
 type DBTransactionLogger struct {
@@ -36,8 +37,8 @@ func newFileTransactionsLogger(filePath string) (*FileTransactionLogger, error) 
 	}, nil
 }
 
-func (l *FileTransactionLogger) writePutTransaction(key string, value string) {
-	l.events <- Event{id: l.id, kind: EventKindPut, key: key, value: value, time: time.Now()}
+func (l *FileTransactionLogger) writePutTransaction(key string, val interface{}) {
+	l.events <- Event{id: l.id, kind: EventKindPut, key: key, val: val, time: time.Now()}
 }
 
 func (l *FileTransactionLogger) writeGetTransaction(key string) {
@@ -48,49 +49,61 @@ func (l *FileTransactionLogger) writeDeleteTransaction(key string) {
 	l.events <- Event{id: l.id, kind: EventKindDelete, key: key, time: time.Now()}
 }
 
-func (l *FileTransactionLogger) writeEvents() {
+func (l *FileTransactionLogger) processEvents(ctx context.Context) {
 	events := make(chan Event, 64) // Why the channel is buffered?
 	errors := make(chan error, 64)
 
+	// TODO: Figure out why do we assign events buffered channel to l.events
 	l.events = events
 	l.errors = errors
 
-	go func() {
-		// Event format
-		//    {
-		//    	id: 0;
-		//    	kind: EventKindPut;
-		//    	key: "key";
-		//    	value: "value" | e;
-		//    	time: time;
-		//    },
-		// TODO: Figure out the format for uint64
-		// for event := range events {
-		// 	l.id++
+	for {
+		select {
+		case <-events:
 
-		// 	_, err := fmt.Fprintf(l.file,
-		// 		"{\n"+
-		// 			"\tid: %d;\n"+
-		// 			"\tkind: %s;\n"+
-		// 			"\tkey: %s;\n"+
-		// 			"\tvalue: %s;\n",
-		// 		"\ttime: %s;\n"+
-		// 			"},\n",
-		// 		event.id,
-		// 		eventKind2Str(event.kind),
-		// 		event.key,
-		// 		event.value,
-		// 		event.time.Format(time.DateTime),
-		// 	)
+		case <-ctx.Done():
+			for event := range events {
+				// write events
+				_ = event
+			}
+			return
+		}
+	}
 
-		// 	if err != nil {
-		// 		errors <- err
-		// 		return
-		// 	}
-		// }
-	}()
+	// Event format
+	//    {
+	//    	id: 0;
+	//    	kind: EventKindPut;
+	//    	key: "key";
+	//    	value: "value" | e;
+	//    	time: time;
+	//    },
+	// TODO: Figure out the format for uint64
+	// for event := range events {
+	// 	l.id++
+
+	// 	_, err := fmt.Fprintf(l.file,
+	// 		"{\n"+
+	// 			"\tid: %d;\n"+
+	// 			"\tkind: %s;\n"+
+	// 			"\tkey: %s;\n"+
+	// 			"\tvalue: %s;\n",
+	// 		"\ttime: %s;\n"+
+	// 			"},\n",
+	// 		event.id,
+	// 		eventKind2Str(event.kind),
+	// 		event.key,
+	// 		event.value,
+	// 		event.time.Format(time.DateTime),
+	// 	)
+
+	// 	if err != nil {
+	// 		errors <- err
+	// 		return
+	// 	}
+	// }
 }
 
-// func (l *FileTransactionLogger) readEvents() (<-chan Event, <-chan error) {
-
-// }
+func (l *FileTransactionLogger) readSavedEvents() (<-chan Event, <-chan error) {
+	return nil, nil
+}

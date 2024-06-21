@@ -9,7 +9,7 @@ import (
 )
 
 func TestKVSEcho(t *testing.T) {
-	client := NewClient(&Settings{Endpoint: ":8080"})
+	client := NewClient(&Settings{Endpoint: ":8080", RetriesCount: 4})
 	res := client.Echo(context.Background(), "hello")
 	_ = res
 	// assert.Equal(t, nil, res.Err())

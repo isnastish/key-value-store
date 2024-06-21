@@ -5,11 +5,11 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
-	_ "encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 )
 
 type IntCommandCallback func(c *Client, ctx context.Context, cmd *IntCmd) *IntCmd
@@ -23,13 +23,12 @@ type Settings struct {
 }
 
 type Client struct {
-	settings   *Settings
-	httpClient *http.Client
-	baseURL    *url.URL
+	*http.Client
+	settings *Settings
+	baseURL  *url.URL
 }
 
 type baseCmd struct {
-	name string
 	args []interface{}
 	err  error
 }
@@ -93,200 +92,263 @@ func init() {
 func NewClient(settings *Settings) *Client {
 	baseURL, _ := url.Parse(fmt.Sprintf("http://%s/", settings.Endpoint))
 	return &Client{
-		settings:   settings,
-		httpClient: &http.Client{},
-		baseURL:    baseURL,
+		settings: settings,
+		Client:   &http.Client{},
+		baseURL:  baseURL,
 	}
-}
-
-func newMapCmd(name string, args ...interface{}) *MapCmd {
-	return &MapCmd{baseCmd: baseCmd{name: name, args: args}}
-}
-
-func newStrCmd(name string, args ...interface{}) *StrCmd {
-	return &StrCmd{baseCmd: baseCmd{name: name, args: args}}
-}
-
-func newBoolCmd(name string, args ...interface{}) *BoolCmd {
-	return &BoolCmd{baseCmd: baseCmd{name: name, args: args}}
-}
-
-func newIntCmd(name string, args ...interface{}) *IntCmd {
-	return &IntCmd{baseCmd: baseCmd{name: name, args: args}}
-}
-
-func (c *Client) Echo(ctx context.Context, val string) *StrCmd {
-	args := make([]interface{}, 1)
-	args[1] = val
-
-	cmd := newStrCmd("echo", args)
-	_ = cmdgroup.strCbtable[cmd.name](c, ctx, cmd)
-
-	return cmd
-}
-
-func (c *Client) Hello(ctx context.Context) *StrCmd {
-	cmd := newStrCmd("hello")
-	_ = cmdgroup.strCbtable[cmd.name](c, ctx, cmd)
-	return cmd
-}
-
-func (c *Client) StrGet(ctx context.Context, key string) *StrCmd {
-	args := make([]interface{}, 1)
-	args[0] = key
-
-	cmd := newStrCmd("strget")
-	_ = cmdgroup.strCbtable[cmd.name](c, ctx, cmd)
-
-	return cmd
-}
-
-func (c *Client) StrPut(ctx context.Context, key string, val string) *IntCmd {
-	args := make([]interface{}, 2)
-	args[0] = key
-	args[1] = val
-
-	cmd := newIntCmd("strput", args...)
-	_ = cmdgroup.intCbtable[cmd.name](c, ctx, cmd)
-
-	return cmd
-}
-
-func (c *Client) StrDel(ctx context.Context, key string) *IntCmd {
-	args := make([]interface{}, 1)
-	args[0] = key
-
-	cmd := newIntCmd("strdel", args...)
-	_ = cmdgroup.intCbtable[cmd.name](c, ctx, cmd)
-
-	return cmd
-}
-
-func (c *Client) IntGet(ctx context.Context, key string) *IntCmd {
-	args := make([]interface{}, 1)
-	args[0] = key
-
-	cmd := newIntCmd("intget", args...)
-	_ = cmdgroup.intCbtable[cmd.name](c, ctx, cmd)
-
-	return cmd
-}
-
-func (c *Client) IntPut(ctx context.Context, key string, val int) *IntCmd {
-	args := make([]interface{}, 2)
-	args[0] = key
-	args[1] = val
-
-	cmd := newIntCmd("intput", args...)
-	_ = cmdgroup.intCbtable[cmd.name](c, ctx, cmd)
-
-	return cmd
-}
-
-func (c *Client) IntDel(ctx context.Context, key string) *IntCmd {
-	args := make([]interface{}, 2)
-	args[0] = key
-
-	cmd := newIntCmd("intdel", args...)
-	_ = cmdgroup.intCbtable[cmd.name](c, ctx, cmd)
-
-	return cmd
-}
-
-// Pass an interface?
-// Support []string
-// map[string]string
-// map[string]interface{} (for POD types)
-// {key, value}, {key, value}, {key, value} pairs
-func (c *Client) MapGet(ctx context.Context, key string, val map[string]string) *MapCmd {
-	args := make([]interface{}, 2)
-	args[0] = key
-	args[1] = val
-
-	cmd := newMapCmd("mapget", args...)
-	_ = cmdgroup.mapCbtable[cmd.name](c, ctx, cmd)
-
-	return cmd
-}
-
-func (c *Client) MapPut(ctx context.Context, key string) *IntCmd {
-	args := make([]interface{}, 1)
-	args[0] = key
-
-	cmd := newIntCmd("mapput", args...)
-	_ = cmdgroup.intCbtable[cmd.name](c, ctx, cmd)
-
-	return cmd
-}
-
-func (c *Client) MapDel(ctx context.Context, key string) *IntCmd {
-	args := make([]interface{}, 1)
-	args[0] = key
-
-	cmd := newIntCmd("mapdel", args...)
-	_ = cmdgroup.intCbtable[cmd.name](c, ctx, cmd)
-
-	return cmd
 }
 
 func (b *baseCmd) Err() error {
 	return b.err
 }
 
-func helloCommand(c *Client, ctx context.Context, cmd *StrCmd) *StrCmd {
-	return nil
+func extendArgs(arr []interface{}, args ...interface{}) {
+	for idx, arg := range args {
+		arr[idx] = arg
+	}
 }
 
-func echoCommand(c *Client, ctx context.Context, cmd *StrCmd) *StrCmd {
-	val := cmd.args[0].(string)
-	url := fmt.Sprintf("http://%s/%s", c.settings.Endpoint, cmd.name)
-	req, err := http.NewRequestWithContext(ctx, "PUT", url, bytes.NewBufferString(val))
-	if err != nil {
-		cmd.err = err
-		return cmd
-	}
-	req.Header.Add("Content-Length", fmt.Sprintf("%d", len(val)))
-	req.Header.Add("Content-Type", "text/plain")
-	req.Header.Add("User-Agent", "kvs-client")
-	resp, err := c.httpClient.Do(req)
-	if err != nil && err != io.EOF {
-		cmd.err = err
-		return cmd
-	} // TODO: Handle resp.Status != 200
-	bytes, _ := io.ReadAll(resp.Body)
-	defer resp.Body.Close()
-	cmd.result = string(bytes)
+func newMapCmd(args ...interface{}) *MapCmd {
+	return &MapCmd{baseCmd: baseCmd{args: args}}
+}
+
+func newStrCmd(args ...interface{}) *StrCmd {
+	return &StrCmd{baseCmd: baseCmd{args: args}}
+}
+
+func newBoolCmd(args ...interface{}) *BoolCmd {
+	return &BoolCmd{baseCmd: baseCmd{args: args}}
+}
+
+func newIntCmd(args ...interface{}) *IntCmd {
+	return &IntCmd{baseCmd: baseCmd{args: args}}
+}
+
+func (c *Client) Echo(ctx context.Context, val string) *StrCmd {
+	cmdname := "echo"
+	args := make([]interface{}, 2)
+	extendArgs(args, cmdname, val)
+
+	cmd := newStrCmd(args...)
+	_ = cmdgroup.strCbtable[cmdname](c, ctx, cmd)
+
 	return cmd
 }
 
-func stringGetCommand(c *Client, ctx context.Context, cmd *StrCmd) *StrCmd {
-	return nil
+func (c *Client) Hello(ctx context.Context) *StrCmd {
+	cmdname := "hello"
+
+	cmd := newStrCmd()
+	_ = cmdgroup.strCbtable[cmdname](c, ctx, cmd)
+
+	return cmd
 }
 
-func stringPutCommand(c *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
-	return nil
+func (c *Client) StrGet(ctx context.Context, key string) *StrCmd {
+	cmdname := "strget"
+	args := make([]interface{}, 2)
+	extendArgs(args, cmdname, key)
+
+	cmd := newStrCmd(args...)
+	_ = cmdgroup.strCbtable[cmdname](c, ctx, cmd)
+
+	return cmd
 }
 
-func stringDelCommand(c *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
-	return nil
+func (c *Client) StrPut(ctx context.Context, key string, val string) *IntCmd {
+	cmdname := "strput"
+	args := make([]interface{}, 3)
+	extendArgs(args, cmdname, key, val)
+
+	cmd := newIntCmd(args...)
+	_ = cmdgroup.intCbtable[cmdname](c, ctx, cmd)
+
+	return cmd
 }
 
-func intGetCommand(c *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
-	return nil
+func (c *Client) StrDel(ctx context.Context, key string) *IntCmd {
+	cmdname := "strdel"
+	args := make([]interface{}, 2)
+	extendArgs(args, cmdname, key)
+
+	cmd := newIntCmd(args...)
+	_ = cmdgroup.intCbtable[cmdname](c, ctx, cmd)
+
+	return cmd
 }
 
-func intPutCommand(c *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
-	return nil
+func (c *Client) IntGet(ctx context.Context, key string) *IntCmd {
+	cmdname := "intget"
+	args := make([]interface{}, 2)
+	extendArgs(args, cmdname, key)
+
+	cmd := newIntCmd(args...)
+	_ = cmdgroup.intCbtable[cmdname](c, ctx, cmd)
+
+	return cmd
 }
 
-func intDelCommand(c *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
-	return nil
+func (c *Client) IntPut(ctx context.Context, key string, val int) *IntCmd {
+	cmdname := "intput"
+	args := make([]interface{}, 3)
+	extendArgs(args, cmdname, key, val)
+
+	cmd := newIntCmd(args...)
+	_ = cmdgroup.intCbtable[cmdname](c, ctx, cmd)
+
+	return cmd
+}
+
+func (c *Client) IntDel(ctx context.Context, key string) *IntCmd {
+	cmdname := "intdel"
+	args := make([]interface{}, 2)
+	extendArgs(args, cmdname, key)
+
+	cmd := newIntCmd(args...)
+	_ = cmdgroup.intCbtable[cmdname](c, ctx, cmd)
+
+	return cmd
+}
+
+func (c *Client) MapGet(ctx context.Context, key string, val map[string]string) *MapCmd {
+	cmdname := "mapget"
+	args := make([]interface{}, 3)
+	extendArgs(args, cmdname, key, val)
+
+	cmd := newMapCmd(args...)
+	_ = cmdgroup.mapCbtable[cmdname](c, ctx, cmd)
+
+	return cmd
+}
+
+func (c *Client) MapPut(ctx context.Context, key string) *IntCmd {
+	cmdname := "mapput"
+	args := make([]interface{}, 2)
+	extendArgs(args, cmdname, key)
+
+	cmd := newIntCmd(args...)
+	_ = cmdgroup.intCbtable[cmdname](c, ctx, cmd)
+
+	return cmd
+}
+
+func (c *Client) MapDel(ctx context.Context, key string) *IntCmd {
+	cmdname := "mapdel"
+	args := make([]interface{}, 2)
+	extendArgs(args, cmdname, key)
+
+	cmd := newIntCmd(args...)
+	_ = cmdgroup.intCbtable[cmdname](c, ctx, cmd)
+
+	return cmd
+}
+
+func helloCommand(client *Client, ctx context.Context, cmd *StrCmd) *StrCmd {
+	path := cmd.args[0].(string)
+	res := makeHttpRequest(client, ctx, http.MethodGet, path, nil)
+	if res.err != nil {
+		cmd.err = res.err
+		return cmd
+	}
+	cmd.result = string(res.contents)
+	return cmd
+}
+
+func echoCommand(client *Client, ctx context.Context, cmd *StrCmd) *StrCmd {
+	path := cmd.args[0].(string)
+	val := cmd.args[1].(string)
+	res := makeHttpRequest(client, ctx, http.MethodPut, path, bytes.NewBufferString(val))
+	if res.err != nil {
+		cmd.err = res.err
+		return cmd
+	}
+	cmd.result = string(res.contents)
+	return cmd
+}
+
+func stringGetCommand(client *Client, ctx context.Context, cmd *StrCmd) *StrCmd {
+	path := cmd.args[0].(string) + "/" + cmd.args[1].(string)
+	res := makeHttpRequest(client, ctx, http.MethodGet, path, nil)
+	if res.err != nil {
+		cmd.err = res.err
+		return cmd
+	}
+	cmd.result = string(res.contents)
+	return cmd
+}
+
+func stringPutCommand(client *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
+	path := cmd.args[0].(string) + "/" + cmd.args[1].(string)
+	val := cmd.args[2].(string)
+	res := makeHttpRequest(client, ctx, http.MethodPut, path, bytes.NewBufferString(val))
+	if res.err != nil {
+		cmd.err = res.err
+		return cmd
+	}
+	cmd.result = res.code
+	return cmd
+}
+
+func stringDelCommand(client *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
+	path := cmd.args[0].(string) + "/" + cmd.args[1].(string)
+	res := makeHttpRequest(client, ctx, http.MethodDelete, path, nil)
+	if res.err != nil {
+		cmd.err = res.err
+		return cmd
+	}
+	cmd.result = res.code
+	return cmd
+}
+
+func intGetCommand(client *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
+	path := cmd.args[0].(string) + "/" + cmd.args[1].(string)
+	res := makeHttpRequest(client, ctx, http.MethodGet, path, nil)
+	if res.err != nil {
+		cmd.err = res.err
+		return cmd
+	}
+	cmd.result, _ = strconv.Atoi(string(res.contents))
+	return cmd
+}
+
+func intPutCommand(client *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
+	path := cmd.args[0].(string) + "/" + cmd.args[1].(string)
+	val := fmt.Sprintf("%d", cmd.args[2].(int))
+	res := makeHttpRequest(client, ctx, http.MethodPut, path, bytes.NewBufferString(val))
+	if res.err != nil {
+		cmd.err = res.err
+		return cmd
+	}
+	// Maybe result shouldn't contain the status code, at least for an integer,
+	// because It will be hard to distinguish whether it's a real value or a response status
+	cmd.result = res.code
+	return cmd
+}
+
+func intDelCommand(client *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
+	path := cmd.args[0].(string) + "/" + cmd.args[1].(string)
+	res := makeHttpRequest(client, ctx, http.MethodDelete, path, nil)
+	if res.err != nil {
+		cmd.err = res.err
+		return cmd
+	}
+	cmd.result = res.code
+	return cmd
+}
+
+func incrCommand(client *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
+	panic("Not implemented!")
+	return cmd
+}
+
+func incrByCommand(client *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
+	panic("Not implemented!")
+	return cmd
 }
 
 func mapGetCommand(c *Client, ctx context.Context, cmd *MapCmd) *MapCmd {
-	key := cmd.args[0].(string)
-	url := c.baseURL.JoinPath(key)
-	result := makeRequest(c, ctx, "GET", url.String(), nil)
+	path := cmd.args[0].(string) + "/" + cmd.args[1].(string)
+	result := makeHttpRequest(c, ctx, http.MethodGet, path, nil)
 	if result.err != nil {
 		cmd.err = result.err
 		return cmd
@@ -302,26 +364,26 @@ func mapGetCommand(c *Client, ctx context.Context, cmd *MapCmd) *MapCmd {
 }
 
 func mapPutCommand(c *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
-	key := cmd.args[0].(string)
-	hashmap := cmd.args[1].(map[string]string)
-	data, err := json.Marshal(hashmap)
-	url := c.baseURL.JoinPath(key)
-	result := makeRequest(c, ctx, "PUT", url.String(), bytes.NewBuffer(data))
-	if result.err != nil {
+	path := cmd.args[0].(string) + "/" + cmd.args[1].(string)
+	hashmap := cmd.args[2].(map[string]string)
+	val, err := json.Marshal(hashmap)
+	res := makeHttpRequest(c, ctx, http.MethodPut, path, bytes.NewBuffer(val))
+	if res.err != nil {
 		cmd.err = err
 		return cmd
 	}
+	cmd.result = res.code
 	return cmd
 }
 
 func mapDelCommand(c *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
-	key := cmd.args[0].(string)
-	url := c.baseURL.JoinPath(key)
-	result := makeRequest(c, ctx, "DELETE", url.String(), nil)
-	if result.err != nil {
-		cmd.err = result.err
+	path := cmd.args[0].(string) + "/" + cmd.args[1].(string)
+	res := makeHttpRequest(c, ctx, http.MethodDelete, path, nil)
+	if res.err != nil {
+		cmd.err = res.err
+		return cmd
 	}
-	cmd.result = result.code
+	cmd.result = res.code
 	return cmd
 }
 
@@ -333,35 +395,37 @@ type makeReqResult struct {
 }
 
 // PUT | GET | DELETE
-func makeRequest(c *Client, ctx context.Context, method string, URL string, contents *bytes.Buffer) *makeReqResult {
+func makeHttpRequest(client *Client, ctx context.Context, httpMethod string, path string, contents *bytes.Buffer) *makeReqResult {
 	result := &makeReqResult{}
-	netURL, err := url.Parse(URL)
+	URL := client.baseURL.JoinPath(path)
+	req, err := http.NewRequestWithContext(ctx, httpMethod, URL.String(), contents)
 	if err != nil {
 		result.err = err
 		return result
 	}
-	req, err := http.NewRequestWithContext(ctx, method, netURL.String(), contents)
-	if err != nil {
-		result.err = err
-		return result
-	}
-	if method == "PUT" {
+	if httpMethod == http.MethodPut {
 		req.Header.Add("Content-Length", fmt.Sprintf("%d", contents.Len()))
 		req.Header.Add("Content-Type", "text/plain") // should be application/json for a map
 	}
 	req.Header.Add("User-Agent", "kvs-client")
-	resp, err := c.httpClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		result.err = err
 		return result
 	}
-	if method == "GET" {
+	if httpMethod == http.MethodGet {
 		bytes, err := io.ReadAll(resp.Body)
 		defer resp.Body.Close()
 		result.err = err
 		result.contents = bytes
 	}
 	result.status = resp.Status
-	result.code = resp.StatusCode
+	if httpMethod == http.MethodDelete {
+		if resp.Header.Get("Deleted") != "" {
+			result.code = 1
+		}
+	} else {
+		result.code = resp.StatusCode
+	}
 	return result
 }

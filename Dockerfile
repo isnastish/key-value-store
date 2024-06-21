@@ -15,4 +15,4 @@ COPY --from=build-env /go/bin/services/kvs /kvs/
 
 ENTRYPOINT [ "/kvs/kvs" ]
 
-CMD [ "--address",  ":8080"]
+CMD [ "--endpoint",  ":8080"]
