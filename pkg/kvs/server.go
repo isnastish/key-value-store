@@ -1,164 +1,514 @@
 package kvs
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"sync"
+	"unicode"
 
 	"github.com/gorilla/mux"
 )
 
-type Storage struct {
+type IntStore struct {
+	data map[string]int
+	sync.RWMutex
+}
+
+type UintStore struct {
+	data map[string]uint32
+	sync.RWMutex
+}
+
+type FloatStore struct {
+	data map[string]float32
+	sync.RWMutex
+}
+
+type StrStore struct {
+	data map[string]string
+	sync.RWMutex
+}
+
+type MapStore struct {
 	data map[string]map[string]string
 	sync.RWMutex
 }
 
-type Settings struct {
-	Addr string
+type CommonStore struct {
+	ints    *IntStore
+	uints   *UintStore
+	floats  *FloatStore
+	strings *StrStore
+	maps    *MapStore
+
+	// naming is hard..., but the common abbreviation for transactions is "txn"
+	txnLogger TransactionLogger
 }
 
-var storage = NewStorage()
+type cmdResult struct {
+	exists bool // rename to deleted?
+	val    interface{}
+	err    error
+}
 
-func NewStorage() *Storage {
-	return &Storage{
+func newCommonStore() *CommonStore {
+	txnLogger, _ := newFileTransactionsLogger("transactions.log")
+
+	return &CommonStore{
+		ints:    newIntStore(),
+		uints:   newUintStore(),
+		floats:  newFloatStore(),
+		strings: newStrStore(),
+		maps:    newMapStore(),
+
+		txnLogger: txnLogger,
+	}
+}
+
+func newIntStore() *IntStore {
+	return &IntStore{
+		data: make(map[string]int),
+	}
+}
+
+func newUintStore() *UintStore {
+	return &UintStore{
+		data: make(map[string]uint32),
+	}
+}
+
+func newFloatStore() *FloatStore {
+	return &FloatStore{
+		data: make(map[string]float32),
+	}
+}
+
+func newStrStore() *StrStore {
+	return &StrStore{
+		data: make(map[string]string),
+	}
+}
+
+func newMapStore() *MapStore {
+	return &MapStore{
 		data: make(map[string]map[string]string),
 	}
 }
 
-// If the key is the same, we override the data
-func (s *Storage) Put(hashkey, key, value string) {
+func errorf(format string, args ...interface{}) error {
+	return fmt.Errorf(format, args...)
+}
+
+func (s *MapStore) put(hashkey string, m map[string]string) *cmdResult {
 	s.Lock()
-	defer s.Unlock()
-
-	bucket, exists := s.data[hashkey]
-	if !exists {
-		m := make(map[string]string)
-		m[key] = value
-		s.data[hashkey] = m
-		return
-	}
-	bucket[key] = value
+	s.data[hashkey] = m
+	s.Unlock()
+	return &cmdResult{}
 }
 
-func (s *Storage) Get(hashkey, key string) (string, error) {
+func (s *MapStore) get(hashkey string) *cmdResult {
 	s.RLock()
-	defer s.RUnlock()
-
-	bucket, exists := s.data[hashkey]
+	val, exists := s.data[hashkey]
+	s.RUnlock()
 	if !exists {
-		return "", fmt.Errorf("bucket doesn't exist")
+		return &cmdResult{err: errorf("Key %s not found in map storage", hashkey)}
 	}
-
-	value, exists := bucket[key]
-	if !exists {
-		return "", fmt.Errorf("key doesn't exist")
-	}
-
-	return value, nil
+	return &cmdResult{val: val}
 }
 
-func (s *Storage) Delete(hashkey, key string) bool {
+func (s *MapStore) del(hashkey string) *cmdResult {
 	s.Lock()
-	defer s.Unlock()
-
-	bucket, exists := s.data[hashkey]
-	if exists {
-		_, exists := bucket[key]
-		if exists {
-			delete(bucket, key)
-			// delete the bucket itself if it's empty
-			if len(bucket) == 0 {
-				delete(s.data, hashkey)
-			}
-			return true
-		}
-	}
-	return false
+	_, exists := s.data[hashkey]
+	delete(s.data, hashkey)
+	s.Unlock()
+	return &cmdResult{exists: exists}
 }
 
-// Check whether a key exists
-func (s *Storage) Head(hashkey, key string) bool {
+func (s *StrStore) put(key string, val string) *cmdResult {
+	s.Lock()
+	s.data[key] = val
+	s.Unlock()
+	return &cmdResult{}
+}
+
+func (s *StrStore) get(key string) *cmdResult {
 	s.RLock()
-	defer s.RUnlock()
-
-	if bucket, exists := s.data[hashkey]; exists {
-		if _, exists := bucket[key]; exists {
-			return true
-		}
+	val, exists := s.data[key]
+	s.RUnlock()
+	if !exists {
+		return &cmdResult{err: errorf("Key %s not found in string storage", key)}
 	}
-	return false
+	return &cmdResult{val: val}
 }
 
-func GetHandler(w http.ResponseWriter, r *http.Request) {
+func (s *StrStore) del(key string) *cmdResult {
+	s.Lock()
+	_, exists := s.data[key]
+	delete(s.data, key)
+	s.Unlock()
+	return &cmdResult{exists: exists}
+}
+
+func (s *IntStore) put(key string, val int) *cmdResult {
+	s.Lock()
+	s.data[key] = val
+	s.Unlock()
+	return &cmdResult{}
+}
+
+func (s *IntStore) get(key string) *cmdResult {
+	s.RLock()
+	val, exists := s.data[key]
+	s.RUnlock()
+	if !exists {
+		return &cmdResult{err: errorf("Key %s not found in integral storage", key)}
+	}
+	return &cmdResult{val: val}
+}
+
+func (s *IntStore) del(key string) *cmdResult {
+	s.Lock()
+	_, exists := s.data[key]
+	delete(s.data, key)
+	s.Unlock()
+	return &cmdResult{exists: exists}
+}
+
+func (s *FloatStore) get(key string) *cmdResult {
+	s.Lock()
+	val, exists := s.data[key]
+	s.Unlock()
+	if !exists {
+		return &cmdResult{err: errorf("Key %s not found in floats storage", key)}
+	}
+	return &cmdResult{val: val}
+}
+
+func (s *FloatStore) put(key string, val float32) *cmdResult {
+	s.Lock()
+	s.data[key] = val
+	s.Unlock()
+	return &cmdResult{}
+}
+
+func (s *FloatStore) del(key string) *cmdResult {
+	s.Lock()
+	_, exists := s.data[key]
+	s.Unlock()
+	return &cmdResult{exists: exists}
+}
+
+func (store *CommonStore) stringPutHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
+	key := vars["key"]
 
-	value, err := storage.Get(vars["hashkey"], vars["key"])
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
-	}
-
-	// StatusOK will be written automatically,
-	// we don't have to call WriteHeader manually
-	w.Write([]byte(value))
-}
-
-func PutHandler(w http.ResponseWriter, r *http.Request) {
-	data, err := io.ReadAll(r.Body)
+	val, err := io.ReadAll(r.Body)
 	defer r.Body.Close()
-
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-
-	// NOTE: If content-type is application/octet-stream, put binaries instead of a string
-	vars := mux.Vars(r)
-	storage.Put(vars["hashkey"], vars["key"], string(data))
-
-	// return the status created error code
+	if res := store.strings.put(key, string(val)); res.err != nil {
+		http.Error(w, res.err.Error(), http.StatusInternalServerError)
+		return
+	}
 	w.WriteHeader(http.StatusCreated)
+	store.txnLogger.writePutEvent(key, string(val))
 }
 
-func DeleteHandler(w http.ResponseWriter, r *http.Request) {
+func (store *CommonStore) stringGetHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
-	if storage.Delete(vars["hashkey"], vars["key"]) {
-		w.Header().Add("deleted", "true")
+	key := vars["key"]
+
+	res := store.strings.get(key)
+	if res.err != nil {
+		http.Error(w, res.err.Error(), http.StatusNotFound)
+		return
+	}
+	bytes := []byte(res.val.(string))
+	w.Header().Add("Content-Type", "text/plain")
+	w.Header().Add("Content-Length", strconv.Itoa(len(bytes)))
+
+	w.WriteHeader(http.StatusOK)
+	w.Write(bytes)
+	store.txnLogger.writeGetEvent(key)
+}
+
+func (store *CommonStore) stringDeleteHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	key := vars["key"]
+
+	res := store.strings.del(key)
+	if res.err != nil {
+		http.Error(w, res.err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if res.exists {
+		w.Header().Add("Deleted", "true")
+	}
+	w.WriteHeader(http.StatusNoContent)
+	store.txnLogger.writeDeleteEvent(key)
+}
+
+func (store *CommonStore) mapPutHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	hashKey := vars["hashkey"]
+
+	body, err := io.ReadAll(r.Body)
+	defer r.Body.Close()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	hashMap := make(map[string]string)
+	err = json.Unmarshal(body, &hashMap)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	res := store.maps.put(hashKey, hashMap)
+	if res.err != nil {
+		http.Error(w, res.err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusCreated)
+	store.txnLogger.writePutEvent(hashKey, hashMap)
+}
+
+func (store *CommonStore) mapGetHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	hashKey := vars["key"]
+
+	res := store.maps.get(hashKey)
+	if res.err != nil {
+		http.Error(w, res.err.Error(), http.StatusInternalServerError)
+		return
+	}
+	store.txnLogger.writeGetEvent(hashKey)
+	bytes, err := json.Marshal(res.val)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Add("Content-Type", "application/octet-stream")
+	w.Header().Add("Content-Length", fmt.Sprintf("%d", len(bytes)))
+
+	w.WriteHeader(http.StatusOK)
+	w.Write(bytes)
+}
+
+func (store *CommonStore) mapDeleteHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	hashKey := vars["key"]
+
+	res := store.maps.del(hashKey)
+	if res.err != nil {
+		http.Error(w, res.err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if res.exists {
+		w.Header().Add("Deleted", "true")
+	}
+	// TODO: Document this in the architecture manual
+	w.WriteHeader(http.StatusNoContent)
+	store.txnLogger.writeDeleteEvent(hashKey)
+}
+
+func (store *CommonStore) intPutHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	key := vars["key"]
+
+	body, err := io.ReadAll(r.Body)
+	defer r.Body.Close()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	val, err := strconv.Atoi(string(body))
+	if err != nil { // Most likely the error will never occur, requires verification
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	store.ints.put(key, val) // omitted
+	w.WriteHeader(http.StatusCreated)
+
+	store.txnLogger.writePutEvent(key, val)
+}
+
+func (store *CommonStore) intGetHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	key := vars["key"]
+
+	res := store.ints.get(key)
+	if res.err != nil {
+		http.Error(w, res.err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Add("Conent-Type", "text/plain")
+	// w.Header().Add("Content-Length", ...) // added automatically
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(fmt.Sprintf("%d", res.val)))
+
+	store.txnLogger.writeGetEvent(key)
+}
+
+func (store *CommonStore) intDeleteHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	key := vars["key"]
+
+	res := store.ints.del(key)
+	if res.err != nil {
+		http.Error(w, res.err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if res.exists {
+		w.Header().Add("Deleted", "true")
+	}
+	w.WriteHeader(http.StatusNoContent)
+	store.txnLogger.writeDeleteEvent(key)
+}
+
+func (store *CommonStore) floatGetHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	key := vars["key"]
+
+	res := store.floats.get(key)
+	if res.err != nil {
+		http.Error(w, res.err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Add("Conent-Type", "text/plain")
+	// w.Header().Add("Content-Length", ...) // added automatically
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(fmt.Sprintf("%d", res.val)))
+
+	store.txnLogger.writeGetEvent(key)
+}
+
+func (store *CommonStore) floatPutHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	key := vars["key"]
+
+	body, err := io.ReadAll(r.Body)
+	defer r.Body.Close()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	val, err := strconv.ParseFloat(string(body), 32)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError) // float32 parse error
+		return
+	}
+	store.floats.put(key, float32(val))
+	w.WriteHeader(http.StatusCreated)
+	store.txnLogger.writePutEvent(key, val)
+}
+
+func (store *CommonStore) floatDeleteHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	key := vars["key"]
+
+	res := store.floats.del(key)
+	if res.err != nil {
+		http.Error(w, res.err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if res.exists {
+		w.Header().Add("Content-Type", "text/plain")
+		w.Header().Add("Deleted", "true")
+	}
+	w.WriteHeader(http.StatusNoContent)
+	store.txnLogger.writeDeleteEvent(key)
+}
+
+func (store *CommonStore) echoHandler(w http.ResponseWriter, r *http.Request) {
+	buf, err := io.ReadAll(r.Body)
+	defer r.Body.Close()
+
+	if err != nil && err != io.EOF {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	w.WriteHeader(http.StatusNotFound)
+	// Convert lowercase letters into uppercase letters and vice-versa
+	val := []rune(string(buf))
+	for i := 0; i < len(val); i++ {
+		if unicode.IsLetter(val[i]) {
+			if unicode.IsLower(val[i]) {
+				val[i] = unicode.ToUpper(val[i])
+				continue
+			}
+			val[i] = unicode.ToLower(val[i])
+		}
+	}
+	w.Header().Add("Content-Type", "text/plain")
+	w.Header().Add("Content-Length", fmt.Sprint(len(val)))
+
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(string(val)))
 }
 
-// Returns a metadata about the resource rather than a resource itself
-func HeadHandler(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	if storage.Head(vars["hashkey"], vars["key"]) {
-		w.Header().Add("exists", "true")
-		return
-	}
+func (store *CommonStore) helloHandler(w http.ResponseWriter, r *http.Request) {
+	const helloStr = "Hello from KVS service"
+	w.Header().Add("Content-Type", "text/plain")
+	w.Header().Add("Content-Length", fmt.Sprint(len(helloStr)))
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(helloStr))
+}
 
-	w.Header().Add("exists", "false")
+type Settings struct {
+	Endpoint    string
+	CertPemFile string
+	KeyPemFile  string
+	Username    string
+	Password    string
 }
 
 func RunServer(settings *Settings) {
+	// Replay events from the transactions logger file if the server crashed.
+	// We should read all the events first before getting to processing all transactions
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	store := newCommonStore()
+	store.txnLogger.readSavedEvents()
+
+	go store.txnLogger.processEvents(ctx)
+
 	router := mux.NewRouter()
 
-	// echo endpoint
-	router.HandleFunc("/echo", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
+	router.HandleFunc("/api/v1/echo", store.echoHandler).Methods("PUT")
+	router.HandleFunc("/api/v1/hello", store.helloHandler).Methods("GET")
 
-	// v1 is the version of the service
-	route := "/v1/{hashkey}/{key:[0-9A-Za-z]+}"
-	router.HandleFunc(route, GetHandler).Methods("GET")
-	router.HandleFunc(route, PutHandler).Methods("PUT")
-	router.HandleFunc(route, DeleteHandler).Methods("DELETE")
-	router.HandleFunc(route, HeadHandler).Methods("HEAD")
+	mapRoute := "/api/v1/mapstore/{key:[0-9A-Za-z]+}"
+	router.HandleFunc(mapRoute, store.mapPutHandler).Methods("PUT")
+	router.HandleFunc(mapRoute, store.mapGetHandler).Methods("GET")
+	router.HandleFunc(mapRoute, store.mapDeleteHandler).Methods("DELETE")
 
-	fmt.Printf("Listening: %s\n", settings.Addr)
+	strRoute := "/api/v1/strstore/{key:[0-9A-Za-z]+}"
+	router.HandleFunc(strRoute, store.stringPutHandler).Methods("PUT")
+	router.HandleFunc(strRoute, store.stringGetHandler).Methods("GET")
+	router.HandleFunc(strRoute, store.stringDeleteHandler).Methods("DELETE")
 
-	if err := http.ListenAndServe(settings.Addr, router); err != nil {
+	intRoute := "/api/v1/intstore/{key:[0-9A-Za-z]+}"
+	router.HandleFunc(intRoute, store.intPutHandler).Methods("PUT")
+	router.HandleFunc(intRoute, store.intGetHandler).Methods("GET")
+	router.HandleFunc(intRoute, store.intDeleteHandler).Methods("DELETE")
+
+	floatRoute := "/api/v1/floatstore/{key:[0-9A-Za-z]+}"
+	router.HandleFunc(floatRoute, store.floatPutHandler).Methods("PUT")
+	router.HandleFunc(floatRoute, store.floatGetHandler).Methods("GET")
+	router.HandleFunc(floatRoute, store.floatDeleteHandler).Methods("DELETE")
+
+	// TODO: Replace with logging in the future
+	fmt.Println("Listening ", settings.Endpoint)
+
+	if err := http.ListenAndServe(settings.Endpoint, router); err != nil {
 		fmt.Printf("Error %v\n", err)
 	}
 }
