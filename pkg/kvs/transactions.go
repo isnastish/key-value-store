@@ -71,6 +71,11 @@ func (l *FileTransactionLogger) processEvents(ctx context.Context) {
 	for {
 		select {
 		case event := <-events:
+			if l.id == MaxEventId {
+				panic("Exceeded maximum event capacity")
+			}
+
+			l.id++
 
 			_, err := fmt.Fprintf(
 				l.file, "Event::{\n"+

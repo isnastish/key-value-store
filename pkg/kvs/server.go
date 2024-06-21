@@ -454,7 +454,7 @@ func (store *CommonStore) echoHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (store *CommonStore) helloHandler(w http.ResponseWriter, r *http.Request) {
-	const helloStr = "Hello from KVS server"
+	const helloStr = "Hello from KVS service"
 	w.Header().Add("Content-Type", "text/plain")
 	w.Header().Add("Content-Length", fmt.Sprint(len(helloStr)))
 	w.WriteHeader(http.StatusOK)
@@ -499,6 +499,14 @@ func RunServer(settings *Settings) {
 	router.HandleFunc(intRoute, store.intPutHandler).Methods("PUT")
 	router.HandleFunc(intRoute, store.intGetHandler).Methods("GET")
 	router.HandleFunc(intRoute, store.intDeleteHandler).Methods("DELETE")
+
+	floatRoute := "/api/v1/floatstore/{key:[0-9A-Za-z]+}"
+	router.HandleFunc(floatRoute, store.floatPutHandler).Methods("PUT")
+	router.HandleFunc(floatRoute, store.floatGetHandler).Methods("GET")
+	router.HandleFunc(floatRoute, store.floatDeleteHandler).Methods("DELETE")
+
+	// TODO: Replace with logging in the future
+	fmt.Println("Listening ", settings.Endpoint)
 
 	if err := http.ListenAndServe(settings.Endpoint, router); err != nil {
 		fmt.Printf("Error %v\n", err)

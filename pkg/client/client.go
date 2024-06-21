@@ -3,7 +3,6 @@ package kvs
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -18,8 +17,9 @@ type MapCommandCallback func(c *Client, ctx context.Context, cmd *MapCmd) *MapCm
 
 type Settings struct {
 	Endpoint     string
+	CertPemFile  string
+	KeyPemFile   string
 	RetriesCount uint
-	TlsConfig    *tls.Config
 }
 
 type Client struct {
@@ -46,6 +46,11 @@ type IntCmd struct {
 type StrCmd struct {
 	baseCmd
 	result string
+}
+
+type FloatCmd struct {
+	baseCmd
+	result float32
 }
 
 // BoolCmd will be used for sets to check whether they contain members,
@@ -90,7 +95,7 @@ func init() {
 }
 
 func NewClient(settings *Settings) *Client {
-	baseURL, _ := url.Parse(fmt.Sprintf("http://%s/", settings.Endpoint))
+	baseURL, _ := url.Parse(fmt.Sprintf("http://%s/api/v1/", settings.Endpoint))
 	return &Client{
 		settings: settings,
 		Client:   &http.Client{},
@@ -98,8 +103,28 @@ func NewClient(settings *Settings) *Client {
 	}
 }
 
-func (b *baseCmd) Err() error {
-	return b.err
+func (c *MapCmd) Result() map[string]string {
+	return c.result
+}
+
+func (c *IntCmd) Result() int {
+	return c.result
+}
+
+func (c *StrCmd) Result() string {
+	return c.result
+}
+
+func (c *FloatCmd) Result() float32 {
+	return c.result
+}
+
+func (c *BoolCmd) Result() bool {
+	return c.result
+}
+
+func (c *baseCmd) Error() error {
+	return c.err
 }
 
 func extendArgs(arr []interface{}, args ...interface{}) {
@@ -137,8 +162,10 @@ func (c *Client) Echo(ctx context.Context, val string) *StrCmd {
 
 func (c *Client) Hello(ctx context.Context) *StrCmd {
 	cmdname := "hello"
+	args := make([]interface{}, 1)
+	args[0] = cmdname
 
-	cmd := newStrCmd()
+	cmd := newStrCmd(args...)
 	_ = cmdgroup.strCbtable[cmdname](c, ctx, cmd)
 
 	return cmd
@@ -398,7 +425,17 @@ type makeReqResult struct {
 func makeHttpRequest(client *Client, ctx context.Context, httpMethod string, path string, contents *bytes.Buffer) *makeReqResult {
 	result := &makeReqResult{}
 	URL := client.baseURL.JoinPath(path)
-	req, err := http.NewRequestWithContext(ctx, httpMethod, URL.String(), contents)
+	var req *http.Request
+	var err error
+	// NewRequestWithContext checks the type of the body, if the type is bytes.Buffer,
+	// and the buffer is nil, it will try to dereference a nil pointer.
+	// This is a quick and hacky way how to prevent that.
+	// Should investigate this problem more in depth.
+	if contents == nil {
+		req, err = http.NewRequestWithContext(ctx, httpMethod, URL.String(), nil)
+	} else {
+		req, err = http.NewRequestWithContext(ctx, httpMethod, URL.String(), contents)
+	}
 	if err != nil {
 		result.err = err
 		return result
@@ -413,7 +450,8 @@ func makeHttpRequest(client *Client, ctx context.Context, httpMethod string, pat
 		result.err = err
 		return result
 	}
-	if httpMethod == http.MethodGet {
+	// PUT method is used for an echo endpoint
+	if httpMethod == http.MethodGet || httpMethod == http.MethodPut {
 		bytes, err := io.ReadAll(resp.Body)
 		defer resp.Body.Close()
 		result.err = err
