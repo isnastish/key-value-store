@@ -117,7 +117,7 @@ func (s *MapStore) get(hashkey string) *cmdResult {
 	val, exists := s.data[hashkey]
 	s.RUnlock()
 	if !exists {
-		return &cmdResult{err: errorf("Key %s not found in map storage", hashkey)}
+		return &cmdResult{err: errorf("Key {%s} not found in map storage", hashkey)}
 	}
 	return &cmdResult{val: val}
 }
@@ -142,7 +142,7 @@ func (s *StrStore) get(key string) *cmdResult {
 	val, exists := s.data[key]
 	s.RUnlock()
 	if !exists {
-		return &cmdResult{err: errorf("Key %s not found in string storage", key)}
+		return &cmdResult{err: errorf("Key {%s} not found in string storage", key)}
 	}
 	return &cmdResult{val: val}
 }
@@ -167,7 +167,7 @@ func (s *IntStore) get(key string) *cmdResult {
 	val, exists := s.data[key]
 	s.RUnlock()
 	if !exists {
-		return &cmdResult{err: errorf("Key %s not found in integral storage", key)}
+		return &cmdResult{err: errorf("Key {%s} not found in integral storage", key)}
 	}
 	return &cmdResult{val: val}
 }
@@ -185,7 +185,7 @@ func (s *FloatStore) get(key string) *cmdResult {
 	val, exists := s.data[key]
 	s.Unlock()
 	if !exists {
-		return &cmdResult{err: errorf("Key %s not found in floats storage", key)}
+		return &cmdResult{err: errorf("Key {%s} not found in floats storage", key)}
 	}
 	return &cmdResult{val: val}
 }
@@ -205,6 +205,8 @@ func (s *FloatStore) del(key string) *cmdResult {
 }
 
 func (store *CommonStore) stringPutHandler(w http.ResponseWriter, r *http.Request) {
+	log.Logger.Info("Endpoint %s, method %s", r.RequestURI, r.Method)
+
 	vars := mux.Vars(r)
 	key := vars["key"]
 
@@ -223,6 +225,8 @@ func (store *CommonStore) stringPutHandler(w http.ResponseWriter, r *http.Reques
 }
 
 func (store *CommonStore) stringGetHandler(w http.ResponseWriter, r *http.Request) {
+	log.Logger.Info("Endpoint %s, method %s", r.RequestURI, r.Method)
+
 	vars := mux.Vars(r)
 	key := vars["key"]
 
@@ -241,6 +245,8 @@ func (store *CommonStore) stringGetHandler(w http.ResponseWriter, r *http.Reques
 }
 
 func (store *CommonStore) stringDeleteHandler(w http.ResponseWriter, r *http.Request) {
+	log.Logger.Info("Endpoint %s, method %s", r.RequestURI, r.Method)
+
 	vars := mux.Vars(r)
 	key := vars["key"]
 
@@ -257,6 +263,8 @@ func (store *CommonStore) stringDeleteHandler(w http.ResponseWriter, r *http.Req
 }
 
 func (store *CommonStore) mapPutHandler(w http.ResponseWriter, r *http.Request) {
+	log.Logger.Info("Endpoint %s, method %s", r.RequestURI, r.Method)
+
 	vars := mux.Vars(r)
 	hashKey := vars["hashkey"]
 
@@ -282,6 +290,8 @@ func (store *CommonStore) mapPutHandler(w http.ResponseWriter, r *http.Request) 
 }
 
 func (store *CommonStore) mapGetHandler(w http.ResponseWriter, r *http.Request) {
+	log.Logger.Info("Endpoint %s, method %s", r.RequestURI, r.Method)
+
 	vars := mux.Vars(r)
 	hashKey := vars["key"]
 
@@ -304,6 +314,8 @@ func (store *CommonStore) mapGetHandler(w http.ResponseWriter, r *http.Request) 
 }
 
 func (store *CommonStore) mapDeleteHandler(w http.ResponseWriter, r *http.Request) {
+	log.Logger.Info("Endpoint %s, method %s", r.RequestURI, r.Method)
+
 	vars := mux.Vars(r)
 	hashKey := vars["key"]
 
@@ -321,6 +333,8 @@ func (store *CommonStore) mapDeleteHandler(w http.ResponseWriter, r *http.Reques
 }
 
 func (store *CommonStore) intPutHandler(w http.ResponseWriter, r *http.Request) {
+	log.Logger.Info("Endpoint %s, method %s", r.RequestURI, r.Method)
+
 	vars := mux.Vars(r)
 	key := vars["key"]
 
@@ -342,16 +356,17 @@ func (store *CommonStore) intPutHandler(w http.ResponseWriter, r *http.Request) 
 }
 
 func (store *CommonStore) intGetHandler(w http.ResponseWriter, r *http.Request) {
+	log.Logger.Info("Endpoint %s, method %s", r.RequestURI, r.Method)
+
 	vars := mux.Vars(r)
 	key := vars["key"]
 
 	res := store.ints.get(key)
 	if res.err != nil {
-		http.Error(w, res.err.Error(), http.StatusInternalServerError)
+		http.Error(w, res.err.Error(), http.StatusNotFound)
 		return
 	}
 	w.Header().Add("Conent-Type", "text/plain")
-	// w.Header().Add("Content-Length", ...) // added automatically
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(fmt.Sprintf("%d", res.val)))
 
@@ -359,6 +374,8 @@ func (store *CommonStore) intGetHandler(w http.ResponseWriter, r *http.Request) 
 }
 
 func (store *CommonStore) intDeleteHandler(w http.ResponseWriter, r *http.Request) {
+	log.Logger.Info("Endpoint %s, method %s", r.RequestURI, r.Method)
+
 	vars := mux.Vars(r)
 	key := vars["key"]
 
@@ -375,6 +392,8 @@ func (store *CommonStore) intDeleteHandler(w http.ResponseWriter, r *http.Reques
 }
 
 func (store *CommonStore) floatGetHandler(w http.ResponseWriter, r *http.Request) {
+	log.Logger.Info("Endpoint %s, method %s", r.RequestURI, r.Method)
+
 	vars := mux.Vars(r)
 	key := vars["key"]
 
@@ -392,6 +411,8 @@ func (store *CommonStore) floatGetHandler(w http.ResponseWriter, r *http.Request
 }
 
 func (store *CommonStore) floatPutHandler(w http.ResponseWriter, r *http.Request) {
+	log.Logger.Info("Endpoint %s, method %s", r.RequestURI, r.Method)
+
 	vars := mux.Vars(r)
 	key := vars["key"]
 
@@ -412,6 +433,8 @@ func (store *CommonStore) floatPutHandler(w http.ResponseWriter, r *http.Request
 }
 
 func (store *CommonStore) floatDeleteHandler(w http.ResponseWriter, r *http.Request) {
+	log.Logger.Info("Endpoint %s, method %s", r.RequestURI, r.Method)
+
 	vars := mux.Vars(r)
 	key := vars["key"]
 
@@ -429,6 +452,8 @@ func (store *CommonStore) floatDeleteHandler(w http.ResponseWriter, r *http.Requ
 }
 
 func (store *CommonStore) echoHandler(w http.ResponseWriter, r *http.Request) {
+	log.Logger.Info("Endpoint %s, method %s", r.RequestURI, r.Method)
+
 	buf, err := io.ReadAll(r.Body)
 	defer r.Body.Close()
 
@@ -456,6 +481,8 @@ func (store *CommonStore) echoHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (store *CommonStore) helloHandler(w http.ResponseWriter, r *http.Request) {
+	log.Logger.Info("Endpoint %s, method %s", r.RequestURI, r.Method)
+
 	const helloStr = "Hello from KVS service"
 	w.Header().Add("Content-Type", "text/plain")
 	w.Header().Add("Content-Length", fmt.Sprint(len(helloStr)))
@@ -483,29 +510,30 @@ func RunServer(settings *Settings) {
 	go store.txnLogger.processEvents(ctx)
 
 	router := mux.NewRouter()
+	subrouter := router.PathPrefix("/api/v1/").Subrouter()
 
-	router.HandleFunc("/api/v1/echo", store.echoHandler).Methods("PUT")
-	router.HandleFunc("/api/v1/hello", store.helloHandler).Methods("GET")
+	// NOTE: The echo endpoint should be bound to GET method and contain a body,
+	// even though it violates the rules of REST api.
+	// Since we don't store the received string anywhere on the server side.
+	// That will simplify error processing on the client side.
+	subrouter.Path("/echo").HandlerFunc(store.echoHandler).Methods("GET")
+	subrouter.Path("/hello").HandlerFunc(store.helloHandler).Methods("GET")
 
-	mapRoute := "/api/v1/mapstore/{key:[0-9A-Za-z]+}"
-	router.HandleFunc(mapRoute, store.mapPutHandler).Methods("PUT")
-	router.HandleFunc(mapRoute, store.mapGetHandler).Methods("GET")
-	router.HandleFunc(mapRoute, store.mapDeleteHandler).Methods("DELETE")
+	subrouter.Path("/mapput/{key:[0-9A-Za-z]+}").HandlerFunc(store.mapPutHandler).Methods("PUT")
+	subrouter.Path("/mapget/{key:[0-9A-Za-z]+}").HandlerFunc(store.mapGetHandler).Methods("GET")
+	subrouter.Path("/mapdel/{key:[0-9A-Za-z]+}").HandlerFunc(store.mapDeleteHandler).Methods("DELETE")
 
-	strRoute := "/api/v1/strstore/{key:[0-9A-Za-z]+}"
-	router.HandleFunc(strRoute, store.stringPutHandler).Methods("PUT")
-	router.HandleFunc(strRoute, store.stringGetHandler).Methods("GET")
-	router.HandleFunc(strRoute, store.stringDeleteHandler).Methods("DELETE")
+	subrouter.Path("/strput/{key:[0-9A-Za-z]+}").HandlerFunc(store.stringPutHandler).Methods("PUT")
+	subrouter.Path("/strget/{key:[0-9A-Za-z]+}").HandlerFunc(store.stringGetHandler).Methods("GET")
+	subrouter.Path("/strdel/{key:[0-9A-Za-z]+}").HandlerFunc(store.stringDeleteHandler).Methods("DELETE")
 
-	intRoute := "/api/v1/intstore/{key:[0-9A-Za-z]+}"
-	router.HandleFunc(intRoute, store.intPutHandler).Methods("PUT")
-	router.HandleFunc(intRoute, store.intGetHandler).Methods("GET")
-	router.HandleFunc(intRoute, store.intDeleteHandler).Methods("DELETE")
+	subrouter.Path("/intput/{key:[0-9A-Za-z]+}").HandlerFunc(store.intPutHandler).Methods("PUT")
+	subrouter.Path("/intget/{key:[0-9A-Za-z]+}").HandlerFunc(store.intGetHandler).Methods("GET")
+	subrouter.Path("/intdel/{key:[0-9A-Za-z]+}").HandlerFunc(store.intDeleteHandler).Methods("DELETE")
 
-	floatRoute := "/api/v1/floatstore/{key:[0-9A-Za-z]+}"
-	router.HandleFunc(floatRoute, store.floatPutHandler).Methods("PUT")
-	router.HandleFunc(floatRoute, store.floatGetHandler).Methods("GET")
-	router.HandleFunc(floatRoute, store.floatDeleteHandler).Methods("DELETE")
+	subrouter.Path("/floatput/{key:[0-9A-Za-z]+}").HandlerFunc(store.floatPutHandler).Methods("PUT")
+	subrouter.Path("/floatget/{key:[0-9A-Za-z]+}").HandlerFunc(store.floatGetHandler).Methods("GET")
+	subrouter.Path("/floatdel/{key:[0-9A-Za-z]+}").HandlerFunc(store.floatDeleteHandler).Methods("DELETE")
 
 	log.Logger.Info("Listening %s", settings.Endpoint)
 

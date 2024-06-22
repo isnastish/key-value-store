@@ -1,9 +1,12 @@
 package kvs
 
+// TODO: Add retries to makeHttpRequest function on specific error codes.
+
 import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,9 +14,11 @@ import (
 	"strconv"
 )
 
-type IntCommandCallback func(c *Client, ctx context.Context, cmd *IntCmd) *IntCmd
-type StringCommandCallback func(c *Client, ctx context.Context, cmd *StrCmd) *StrCmd
-type MapCommandCallback func(c *Client, ctx context.Context, cmd *MapCmd) *MapCmd
+type IntCmdCallback func(c *Client, ctx context.Context, cmd *IntCmd) *IntCmd
+type StrCmdCallback func(c *Client, ctx context.Context, cmd *StrCmd) *StrCmd
+type MapCmdCallback func(c *Client, ctx context.Context, cmd *MapCmd) *MapCmd
+type BoolCmdCallback func(c *Client, ctx context.Context, cmd *BoolCmd) *BoolCmd
+type F32CmdCallback func(c *Client, ctx context.Context, cmd *FloatCmd) *FloatCmd
 
 type Settings struct {
 	Endpoint     string
@@ -28,9 +33,19 @@ type Client struct {
 	baseURL  *url.URL
 }
 
+type cmdStatus struct {
+	statusCode int
+	status     string
+	err        error
+}
 type baseCmd struct {
+	cmdStatus
 	args []interface{}
-	err  error
+}
+
+type reqResult struct {
+	cmdStatus
+	contents []byte
 }
 
 type MapCmd struct {
@@ -53,26 +68,28 @@ type FloatCmd struct {
 	result float32
 }
 
-// BoolCmd will be used for sets to check whether they contain members,
-// maybe even for maps as well.
 type BoolCmd struct {
 	baseCmd
 	result bool
 }
 
 type CmdGroup struct {
-	intCbtable map[string]IntCommandCallback
-	strCbtable map[string]StringCommandCallback
-	mapCbtable map[string]MapCommandCallback
+	intCbtable  map[string]IntCmdCallback
+	strCbtable  map[string]StrCmdCallback
+	mapCbtable  map[string]MapCmdCallback
+	f32CbTable  map[string]F32CmdCallback
+	boolCbTable map[string]BoolCmdCallback
 }
 
 var cmdgroup *CmdGroup
 
 func newCmdGroup() *CmdGroup {
 	return &CmdGroup{
-		intCbtable: make(map[string]IntCommandCallback),
-		strCbtable: make(map[string]StringCommandCallback),
-		mapCbtable: make(map[string]MapCommandCallback),
+		intCbtable:  make(map[string]IntCmdCallback),
+		strCbtable:  make(map[string]StrCmdCallback),
+		mapCbtable:  make(map[string]MapCmdCallback),
+		f32CbTable:  make(map[string]F32CmdCallback),
+		boolCbTable: make(map[string]BoolCmdCallback),
 	}
 }
 
@@ -81,17 +98,22 @@ func init() {
 
 	cmdgroup.intCbtable["intget"] = intGetCommand
 	cmdgroup.intCbtable["intput"] = intPutCommand
-	cmdgroup.intCbtable["intdel"] = intDelCommand
-	cmdgroup.intCbtable["strput"] = stringPutCommand
-	cmdgroup.intCbtable["strdel"] = stringDelCommand
-	cmdgroup.intCbtable["mapdel"] = mapDelCommand
+	cmdgroup.intCbtable["strput"] = strPutCommand
 	cmdgroup.intCbtable["mapput"] = mapPutCommand
+	cmdgroup.intCbtable["floatput"] = f32PutCommand
 
-	cmdgroup.strCbtable["strget"] = stringGetCommand
+	cmdgroup.strCbtable["strget"] = strGetCommand
 	cmdgroup.strCbtable["echo"] = echoCommand
 	cmdgroup.strCbtable["hello"] = helloCommand
 
 	cmdgroup.mapCbtable["mapget"] = mapGetCommand
+
+	cmdgroup.boolCbTable["intdel"] = intDelCommand
+	cmdgroup.boolCbTable["strdel"] = strDelCommand
+	cmdgroup.boolCbTable["mapdel"] = mapDelCommand
+	cmdgroup.boolCbTable["floatdel"] = f32DelCommand
+
+	cmdgroup.f32CbTable["floatget"] = f32GetCommand
 }
 
 func NewClient(settings *Settings) *Client {
@@ -127,6 +149,14 @@ func (c *baseCmd) Error() error {
 	return c.err
 }
 
+func (c *baseCmd) Status() string {
+	return c.status
+}
+
+func (c *baseCmd) StatusCode() int {
+	return c.statusCode
+}
+
 func extendArgs(arr []interface{}, args ...interface{}) {
 	for idx, arg := range args {
 		arr[idx] = arg
@@ -149,14 +179,16 @@ func newIntCmd(args ...interface{}) *IntCmd {
 	return &IntCmd{baseCmd: baseCmd{args: args}}
 }
 
+func newFloatCmd(args ...interface{}) *FloatCmd {
+	return &FloatCmd{baseCmd: baseCmd{args: args}}
+}
+
 func (c *Client) Echo(ctx context.Context, val string) *StrCmd {
 	cmdname := "echo"
 	args := make([]interface{}, 2)
 	extendArgs(args, cmdname, val)
-
 	cmd := newStrCmd(args...)
 	_ = cmdgroup.strCbtable[cmdname](c, ctx, cmd)
-
 	return cmd
 }
 
@@ -164,10 +196,8 @@ func (c *Client) Hello(ctx context.Context) *StrCmd {
 	cmdname := "hello"
 	args := make([]interface{}, 1)
 	args[0] = cmdname
-
 	cmd := newStrCmd(args...)
 	_ = cmdgroup.strCbtable[cmdname](c, ctx, cmd)
-
 	return cmd
 }
 
@@ -175,10 +205,8 @@ func (c *Client) StrGet(ctx context.Context, key string) *StrCmd {
 	cmdname := "strget"
 	args := make([]interface{}, 2)
 	extendArgs(args, cmdname, key)
-
 	cmd := newStrCmd(args...)
 	_ = cmdgroup.strCbtable[cmdname](c, ctx, cmd)
-
 	return cmd
 }
 
@@ -186,21 +214,17 @@ func (c *Client) StrPut(ctx context.Context, key string, val string) *IntCmd {
 	cmdname := "strput"
 	args := make([]interface{}, 3)
 	extendArgs(args, cmdname, key, val)
-
 	cmd := newIntCmd(args...)
 	_ = cmdgroup.intCbtable[cmdname](c, ctx, cmd)
-
 	return cmd
 }
 
-func (c *Client) StrDel(ctx context.Context, key string) *IntCmd {
+func (c *Client) StrDel(ctx context.Context, key string) *BoolCmd {
 	cmdname := "strdel"
 	args := make([]interface{}, 2)
 	extendArgs(args, cmdname, key)
-
-	cmd := newIntCmd(args...)
-	_ = cmdgroup.intCbtable[cmdname](c, ctx, cmd)
-
+	cmd := newBoolCmd(args...)
+	_ = cmdgroup.boolCbTable[cmdname](c, ctx, cmd)
 	return cmd
 }
 
@@ -208,10 +232,8 @@ func (c *Client) IntGet(ctx context.Context, key string) *IntCmd {
 	cmdname := "intget"
 	args := make([]interface{}, 2)
 	extendArgs(args, cmdname, key)
-
 	cmd := newIntCmd(args...)
 	_ = cmdgroup.intCbtable[cmdname](c, ctx, cmd)
-
 	return cmd
 }
 
@@ -219,32 +241,53 @@ func (c *Client) IntPut(ctx context.Context, key string, val int) *IntCmd {
 	cmdname := "intput"
 	args := make([]interface{}, 3)
 	extendArgs(args, cmdname, key, val)
-
 	cmd := newIntCmd(args...)
 	_ = cmdgroup.intCbtable[cmdname](c, ctx, cmd)
-
 	return cmd
 }
 
-func (c *Client) IntDel(ctx context.Context, key string) *IntCmd {
+func (c *Client) IntDel(ctx context.Context, key string) *BoolCmd {
 	cmdname := "intdel"
 	args := make([]interface{}, 2)
 	extendArgs(args, cmdname, key)
+	cmd := newBoolCmd(args...)
+	_ = cmdgroup.boolCbTable[cmdname](c, ctx, cmd)
+	return cmd
+}
 
+func (c *Client) F32Get(ctx context.Context, key string) *FloatCmd {
+	cmdName := "floatget"
+	args := make([]interface{}, 2)
+	extendArgs(args, cmdName, key)
+	cmd := newFloatCmd(args...)
+	_ = cmdgroup.f32CbTable[cmdName](c, ctx, cmd)
+	return cmd
+}
+
+func (c *Client) F32Put(ctx context.Context, key string, val float32) *IntCmd {
+	cmdName := "floatput"
+	args := make([]interface{}, 3)
+	extendArgs(args, cmdName, key, val)
 	cmd := newIntCmd(args...)
-	_ = cmdgroup.intCbtable[cmdname](c, ctx, cmd)
+	_ = cmdgroup.intCbtable[cmdName](c, ctx, cmd)
+	return cmd
+}
 
+func (c *Client) F32Del(ctx context.Context, key string) *BoolCmd {
+	cmdName := "floatdel"
+	args := make([]interface{}, 2)
+	extendArgs(args, cmdName, key)
+	cmd := newBoolCmd(args...)
+	_ = cmdgroup.boolCbTable[cmdName](c, ctx, cmd)
 	return cmd
 }
 
 func (c *Client) MapGet(ctx context.Context, key string, val map[string]string) *MapCmd {
-	cmdname := "mapget"
+	cmdName := "mapget"
 	args := make([]interface{}, 3)
-	extendArgs(args, cmdname, key, val)
-
+	extendArgs(args, cmdName, key, val)
 	cmd := newMapCmd(args...)
-	_ = cmdgroup.mapCbtable[cmdname](c, ctx, cmd)
-
+	_ = cmdgroup.mapCbtable[cmdName](c, ctx, cmd)
 	return cmd
 }
 
@@ -252,29 +295,25 @@ func (c *Client) MapPut(ctx context.Context, key string) *IntCmd {
 	cmdname := "mapput"
 	args := make([]interface{}, 2)
 	extendArgs(args, cmdname, key)
-
 	cmd := newIntCmd(args...)
 	_ = cmdgroup.intCbtable[cmdname](c, ctx, cmd)
-
 	return cmd
 }
 
-func (c *Client) MapDel(ctx context.Context, key string) *IntCmd {
+func (c *Client) MapDel(ctx context.Context, key string) *BoolCmd {
 	cmdname := "mapdel"
 	args := make([]interface{}, 2)
 	extendArgs(args, cmdname, key)
-
-	cmd := newIntCmd(args...)
-	_ = cmdgroup.intCbtable[cmdname](c, ctx, cmd)
-
+	cmd := newBoolCmd(args...)
+	_ = cmdgroup.boolCbTable[cmdname](c, ctx, cmd)
 	return cmd
 }
 
 func helloCommand(client *Client, ctx context.Context, cmd *StrCmd) *StrCmd {
 	path := cmd.args[0].(string)
 	res := makeHttpRequest(client, ctx, http.MethodGet, path, nil)
+	cmd.cmdStatus = res.cmdStatus
 	if res.err != nil {
-		cmd.err = res.err
 		return cmd
 	}
 	cmd.result = string(res.contents)
@@ -284,54 +323,60 @@ func helloCommand(client *Client, ctx context.Context, cmd *StrCmd) *StrCmd {
 func echoCommand(client *Client, ctx context.Context, cmd *StrCmd) *StrCmd {
 	path := cmd.args[0].(string)
 	val := cmd.args[1].(string)
-	res := makeHttpRequest(client, ctx, http.MethodPut, path, bytes.NewBufferString(val))
+	res := makeHttpRequest(client, ctx, http.MethodGet, path, bytes.NewBufferString(val))
+	cmd.cmdStatus = res.cmdStatus
 	if res.err != nil {
-		cmd.err = res.err
 		return cmd
 	}
 	cmd.result = string(res.contents)
 	return cmd
 }
 
-func stringGetCommand(client *Client, ctx context.Context, cmd *StrCmd) *StrCmd {
+func strGetCommand(client *Client, ctx context.Context, cmd *StrCmd) *StrCmd {
 	path := cmd.args[0].(string) + "/" + cmd.args[1].(string)
 	res := makeHttpRequest(client, ctx, http.MethodGet, path, nil)
+	cmd.cmdStatus = res.cmdStatus
 	if res.err != nil {
-		cmd.err = res.err
 		return cmd
 	}
 	cmd.result = string(res.contents)
 	return cmd
 }
 
-func stringPutCommand(client *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
+func strPutCommand(client *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
 	path := cmd.args[0].(string) + "/" + cmd.args[1].(string)
 	val := cmd.args[2].(string)
 	res := makeHttpRequest(client, ctx, http.MethodPut, path, bytes.NewBufferString(val))
+	cmd.cmdStatus = res.cmdStatus
 	if res.err != nil {
-		cmd.err = res.err
 		return cmd
 	}
-	cmd.result = res.code
+	// I cannot think of anything else rather than putting a status
+	// from a PUT operation into a result itself.
+	cmd.result = res.statusCode
 	return cmd
 }
 
-func stringDelCommand(client *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
+func strDelCommand(client *Client, ctx context.Context, cmd *BoolCmd) *BoolCmd {
 	path := cmd.args[0].(string) + "/" + cmd.args[1].(string)
 	res := makeHttpRequest(client, ctx, http.MethodDelete, path, nil)
+	cmd.cmdStatus = res.cmdStatus
 	if res.err != nil {
-		cmd.err = res.err
 		return cmd
 	}
-	cmd.result = res.code
+	// If result's contents is not empty the value was deleted, so we set result to true,
+	// false otherwise if DELETE had no effect.
+	if res.contents != nil {
+		cmd.result = true
+	}
 	return cmd
 }
 
 func intGetCommand(client *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
 	path := cmd.args[0].(string) + "/" + cmd.args[1].(string)
 	res := makeHttpRequest(client, ctx, http.MethodGet, path, nil)
+	cmd.cmdStatus = res.cmdStatus
 	if res.err != nil {
-		cmd.err = res.err
 		return cmd
 	}
 	cmd.result, _ = strconv.Atoi(string(res.contents))
@@ -342,50 +387,72 @@ func intPutCommand(client *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
 	path := cmd.args[0].(string) + "/" + cmd.args[1].(string)
 	val := fmt.Sprintf("%d", cmd.args[2].(int))
 	res := makeHttpRequest(client, ctx, http.MethodPut, path, bytes.NewBufferString(val))
-	if res.err != nil {
-		cmd.err = res.err
-		return cmd
-	}
-	// Maybe result shouldn't contain the status code, at least for an integer,
-	// because It will be hard to distinguish whether it's a real value or a response status
-	cmd.result = res.code
+	cmd.cmdStatus = res.cmdStatus
 	return cmd
 }
 
-func intDelCommand(client *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
+func intDelCommand(client *Client, ctx context.Context, cmd *BoolCmd) *BoolCmd {
 	path := cmd.args[0].(string) + "/" + cmd.args[1].(string)
 	res := makeHttpRequest(client, ctx, http.MethodDelete, path, nil)
+	cmd.cmdStatus = res.cmdStatus
 	if res.err != nil {
-		cmd.err = res.err
 		return cmd
 	}
-	cmd.result = res.code
+	// If the contents is not empty, the value was present before deletion,
+	// and was successfully removed. If it's empty, then the value was't present and the deletion operatation had no effect.
+	if res.contents != nil {
+		cmd.result = true
+	}
 	return cmd
 }
 
-func incrCommand(client *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
-	panic("Not implemented!")
+func f32GetCommand(client *Client, ctx context.Context, cmd *FloatCmd) *FloatCmd {
+	path := cmd.args[0].(string) + "/" + cmd.args[1].(string)
+	res := makeHttpRequest(client, ctx, http.MethodGet, path, nil)
+	cmd.cmdStatus = res.cmdStatus
+	if res.err != nil {
+		return cmd
+	}
+	val, _ := strconv.ParseFloat(string(res.contents), 32)
+	cmd.result = float32(val)
 	return cmd
 }
 
-func incrByCommand(client *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
-	panic("Not implemented!")
+func f32PutCommand(client *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
+	path := cmd.args[0].(string) + "/" + cmd.args[1].(string)
+	val := fmt.Sprintf("%e", cmd.args[2].(float32))
+	res := makeHttpRequest(client, ctx, http.MethodPut, path, bytes.NewBufferString(val))
+	cmd.cmdStatus = res.cmdStatus
+	if res.err != nil {
+		return cmd
+	}
+	// Again, put the status code as a result of an operation
+	cmd.result = res.statusCode
+	return cmd
+}
+
+func f32DelCommand(client *Client, ctx context.Context, cmd *BoolCmd) *BoolCmd {
+	path := cmd.args[0].(string) + "/" + cmd.args[1].(string)
+	res := makeHttpRequest(client, ctx, http.MethodDelete, path, nil)
+	cmd.cmdStatus = res.cmdStatus
+	if res.err != nil {
+		return cmd
+	}
+	if res.contents != nil {
+		cmd.result = true
+	}
 	return cmd
 }
 
 func mapGetCommand(c *Client, ctx context.Context, cmd *MapCmd) *MapCmd {
 	path := cmd.args[0].(string) + "/" + cmd.args[1].(string)
-	result := makeHttpRequest(c, ctx, http.MethodGet, path, nil)
-	if result.err != nil {
-		cmd.err = result.err
+	res := makeHttpRequest(c, ctx, http.MethodGet, path, nil)
+	cmd.cmdStatus = res.cmdStatus
+	if res.err != nil {
 		return cmd
 	}
 	val := make(map[string]string)
-	err := json.Unmarshal(result.contents, &val)
-	if err != nil {
-		cmd.err = err
-		return cmd
-	}
+	json.Unmarshal(res.contents, &val) // shouldn't fail if was properly marshalled on the server side
 	cmd.result = val
 	return cmd
 }
@@ -393,37 +460,39 @@ func mapGetCommand(c *Client, ctx context.Context, cmd *MapCmd) *MapCmd {
 func mapPutCommand(c *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
 	path := cmd.args[0].(string) + "/" + cmd.args[1].(string)
 	hashmap := cmd.args[2].(map[string]string)
-	val, err := json.Marshal(hashmap)
+	val, _ := json.Marshal(hashmap)
 	res := makeHttpRequest(c, ctx, http.MethodPut, path, bytes.NewBuffer(val))
+	cmd.cmdStatus = res.cmdStatus
 	if res.err != nil {
-		cmd.err = err
 		return cmd
 	}
-	cmd.result = res.code
+	cmd.result = res.statusCode
 	return cmd
 }
 
-func mapDelCommand(c *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
+func mapDelCommand(c *Client, ctx context.Context, cmd *BoolCmd) *BoolCmd {
 	path := cmd.args[0].(string) + "/" + cmd.args[1].(string)
 	res := makeHttpRequest(c, ctx, http.MethodDelete, path, nil)
+	cmd.cmdStatus = res.cmdStatus
 	if res.err != nil {
-		cmd.err = res.err
 		return cmd
 	}
-	cmd.result = res.code
+	if res.contents != nil {
+		cmd.result = true
+	}
 	return cmd
 }
 
-type makeReqResult struct {
-	status   string
-	code     int
-	contents []byte
-	err      error
+func incrCommand(client *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
+	panic("Not implemented!")
 }
 
-// PUT | GET | DELETE
-func makeHttpRequest(client *Client, ctx context.Context, httpMethod string, path string, contents *bytes.Buffer) *makeReqResult {
-	result := &makeReqResult{}
+func incrByCommand(client *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
+	panic("Not implemented!")
+}
+
+func makeHttpRequest(client *Client, ctx context.Context, httpMethod string, path string, contents *bytes.Buffer) *reqResult {
+	result := &reqResult{}
 	URL := client.baseURL.JoinPath(path)
 	var req *http.Request
 	var err error
@@ -431,6 +500,7 @@ func makeHttpRequest(client *Client, ctx context.Context, httpMethod string, pat
 	// and the buffer is nil, it will try to dereference a nil pointer.
 	// This is a quick and hacky way how to prevent that.
 	// Should investigate this problem more in depth.
+	// Go standard library checks whether body is equal to nil, so I have to investigte this problem more.
 	if contents == nil {
 		req, err = http.NewRequestWithContext(ctx, httpMethod, URL.String(), nil)
 	} else {
@@ -442,28 +512,41 @@ func makeHttpRequest(client *Client, ctx context.Context, httpMethod string, pat
 	}
 	if httpMethod == http.MethodPut {
 		req.Header.Add("Content-Length", fmt.Sprintf("%d", contents.Len()))
-		req.Header.Add("Content-Type", "text/plain") // should be application/json for a map
+		req.Header.Add("Content-Type", "text/plain")
 	}
 	req.Header.Add("User-Agent", "kvs-client")
+	// Non 2xx status code doesn't cause an error
 	resp, err := client.Do(req)
 	if err != nil {
 		result.err = err
 		return result
 	}
-	// PUT method is used for an echo endpoint
-	if httpMethod == http.MethodGet || httpMethod == http.MethodPut {
-		bytes, err := io.ReadAll(resp.Body)
+
+	result.status = resp.Status
+	result.statusCode = resp.StatusCode
+
+	// If the response status for the GET request doesn't equal to 200,
+	// we need to convert the response status into an error.
+	// In this situation, the body will contain an error message assigned by the server.
+	if (httpMethod == http.MethodGet && resp.StatusCode != http.StatusOK) ||
+		(httpMethod == http.MethodPut && resp.StatusCode != http.StatusCreated) ||
+		(httpMethod == http.MethodDelete && resp.StatusCode != http.StatusNoContent) {
+		bytes, _ := io.ReadAll(resp.Body)
 		defer resp.Body.Close()
-		result.err = err
+		result.err = errors.New(string(bytes))
+		return result
+	}
+
+	// If true is returned, the value was deleted.
+	if httpMethod == http.MethodDelete {
+		result.contents = []byte(resp.Header.Get("Deleted"))
+	}
+
+	if httpMethod == http.MethodGet {
+		bytes, _ := io.ReadAll(resp.Body)
+		defer resp.Body.Close()
 		result.contents = bytes
 	}
-	result.status = resp.Status
-	if httpMethod == http.MethodDelete {
-		if resp.Header.Get("Deleted") != "" {
-			result.code = 1
-		}
-	} else {
-		result.code = resp.StatusCode
-	}
+
 	return result
 }
