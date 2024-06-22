@@ -15,3 +15,6 @@ Now, go to visual studio and execute any client's test. You can do it via the te
 ...
 ...
 ```
+
+## Inspiration
+I highly recommend reading this book [Cloud-Native-Go](https://www.amazon.ca/Cloud-Native-Go-Unreliable-Environments/dp/1492076333) If you want to learn more about cloud native and Golang in general. This is where my inspiration came from.
