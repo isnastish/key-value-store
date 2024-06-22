@@ -6,7 +6,7 @@ In order to run a KVS service in a docker container and execute tests against it
 ```log
 {"level":"info","timestamp":"Sat Jun 22 18:17:15 UTC 2024","message":"Listening :8080"}
 ```
-Now, go to visual studio and execute any client's test. You can do it via the terminal with `go test ./... -count=1` command. You should see the logs comming from the kvs service running in the docker container.
+Now, go to visual studio and execute any client's test. You can do it via the terminal with `go test ./... -count=1` command  as well. You should see the logs comming from the kvs service running in the docker container.
 ```log
 {"level":"info","timestamp":"Sat Jun 22 16:52:48 UTC 2024","message":"Endpoint /api/v1-0-0/strget/dummy_String, method GET"}
 {"level":"info","timestamp":"Sat Jun 22 16:52:48 UTC 2024","message":"Endpoint /api/v1-0-0/mapput/randomMap, method PUT"}
