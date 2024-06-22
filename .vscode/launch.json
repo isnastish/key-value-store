@@ -8,8 +8,10 @@
             "mode": "debug",
             "program": "${workspaceFolder}/services/kvs/main.go", 
             "args": [
-                "--address",
-                "localhost:8080",
+                "--endpoint",
+                ":8080",
+                "--loglevel", 
+                "DEBUG",
             ] 
         }, 
     ]
