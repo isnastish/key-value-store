@@ -53,7 +53,7 @@ type CommonStore struct {
 }
 
 type cmdResult struct {
-	exists bool // rename to deleted?
+	exists bool
 	val    interface{}
 	err    error
 }
@@ -106,9 +106,9 @@ func errorf(format string, args ...interface{}) error {
 	return fmt.Errorf(format, args...)
 }
 
-func (s *MapStore) put(hashkey string, m map[string]string) *cmdResult {
+func (s *MapStore) put(hashKey string, val map[string]string) *cmdResult {
 	s.Lock()
-	s.data[hashkey] = m
+	s.data[hashKey] = val
 	s.Unlock()
 	return &cmdResult{}
 }
