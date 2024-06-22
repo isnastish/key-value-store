@@ -11,7 +11,7 @@
                 "--endpoint",
                 ":8080",
                 "--loglevel", 
-                "DEBUG",
+                "DEBUG", // DISABLED // to disable logging
             ] 
         }, 
     ]

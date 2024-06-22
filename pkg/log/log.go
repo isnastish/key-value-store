@@ -43,7 +43,7 @@ func SetupGlobalLogLevel(level string) {
 func newLogger() *logger {
 	l := &logger{}
 	if runtime.GOOS == "windows" {
-		outputWriter := zerolog.ConsoleWriter{Out: colorable.NewColorableStdout()} // Stderr?
+		outputWriter := zerolog.ConsoleWriter{Out: colorable.NewColorableStdout()}
 		l.zerolog = zerolog.New(outputWriter).With().Timestamp().Logger()
 		return l
 	}
