@@ -48,12 +48,12 @@ type CommonStore struct {
 	strings *StrStore
 	maps    *MapStore
 
-	// naming is hard..., but the common abreviation for transactions is "txn"
+	// naming is hard..., but the common abbreviation for transactions is "txn"
 	txnLogger TransactionLogger
 }
 
 type cmdResult struct {
-	exists bool // rename to deleted?
+	exists bool
 	val    interface{}
 	err    error
 }
