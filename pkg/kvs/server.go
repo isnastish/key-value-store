@@ -11,6 +11,8 @@ import (
 	"unicode"
 
 	"github.com/gorilla/mux"
+
+	"github.com/isnastish/kvs/pkg/log"
 )
 
 type IntStore struct {
@@ -505,10 +507,9 @@ func RunServer(settings *Settings) {
 	router.HandleFunc(floatRoute, store.floatGetHandler).Methods("GET")
 	router.HandleFunc(floatRoute, store.floatDeleteHandler).Methods("DELETE")
 
-	// TODO: Replace with logging in the future
-	fmt.Println("Listening ", settings.Endpoint)
+	log.Logger.Info("Listening %s", settings.Endpoint)
 
 	if err := http.ListenAndServe(settings.Endpoint, router); err != nil {
-		fmt.Printf("Error %v\n", err)
+		log.Logger.Panic("Server error %v", err)
 	}
 }
