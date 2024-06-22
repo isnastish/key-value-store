@@ -48,7 +48,7 @@ type CommonStore struct {
 	strings *StrStore
 	maps    *MapStore
 
-	// naming is hard..., but the common abbreviation for transactions is "txn"
+	// naming is hard..., but the common abreviation for transactions is "txn"
 	txnLogger TransactionLogger
 }
 
@@ -106,9 +106,9 @@ func errorf(format string, args ...interface{}) error {
 	return fmt.Errorf(format, args...)
 }
 
-func (s *MapStore) put(hashkey string, m map[string]string) *cmdResult {
+func (s *MapStore) put(hashKey string, val map[string]string) *cmdResult {
 	s.Lock()
-	s.data[hashkey] = m
+	s.data[hashKey] = val
 	s.Unlock()
 	return &cmdResult{}
 }
