@@ -13,6 +13,7 @@ import (
 	"github.com/gorilla/mux"
 
 	"github.com/isnastish/kvs/pkg/log"
+	"github.com/isnastish/kvs/pkg/version"
 )
 
 type IntStore struct {
@@ -200,6 +201,7 @@ func (s *FloatStore) put(key string, val float32) *cmdResult {
 func (s *FloatStore) del(key string) *cmdResult {
 	s.Lock()
 	_, exists := s.data[key]
+	delete(s.data, key)
 	s.Unlock()
 	return &cmdResult{exists: exists}
 }
@@ -266,7 +268,7 @@ func (store *CommonStore) mapPutHandler(w http.ResponseWriter, r *http.Request) 
 	log.Logger.Info("Endpoint %s, method %s", r.RequestURI, r.Method)
 
 	vars := mux.Vars(r)
-	hashKey := vars["hashkey"]
+	hashKey := vars["key"]
 
 	body, err := io.ReadAll(r.Body)
 	defer r.Body.Close()
@@ -297,7 +299,7 @@ func (store *CommonStore) mapGetHandler(w http.ResponseWriter, r *http.Request) 
 
 	res := store.maps.get(hashKey)
 	if res.err != nil {
-		http.Error(w, res.err.Error(), http.StatusInternalServerError)
+		http.Error(w, res.err.Error(), http.StatusNotFound)
 		return
 	}
 	store.txnLogger.writeGetEvent(hashKey)
@@ -345,7 +347,7 @@ func (store *CommonStore) intPutHandler(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	val, err := strconv.Atoi(string(body))
-	if err != nil { // Most likely the error will never occur, requires verification
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -399,13 +401,12 @@ func (store *CommonStore) floatGetHandler(w http.ResponseWriter, r *http.Request
 
 	res := store.floats.get(key)
 	if res.err != nil {
-		http.Error(w, res.err.Error(), http.StatusInternalServerError)
+		http.Error(w, res.err.Error(), http.StatusNotFound)
 		return
 	}
 	w.Header().Add("Conent-Type", "text/plain")
-	// w.Header().Add("Content-Length", ...) // added automatically
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(fmt.Sprintf("%d", res.val)))
+	w.Write([]byte(fmt.Sprintf("%e", res.val.(float32))))
 
 	store.txnLogger.writeGetEvent(key)
 }
@@ -510,7 +511,7 @@ func RunServer(settings *Settings) {
 	go store.txnLogger.processEvents(ctx)
 
 	router := mux.NewRouter()
-	subrouter := router.PathPrefix("/api/v1/").Subrouter()
+	subrouter := router.PathPrefix(fmt.Sprintf("/api/%s/", version.GetServiceVersion())).Subrouter()
 
 	// NOTE: The echo endpoint should be bound to GET method and contain a body,
 	// even though it violates the rules of REST api.
@@ -519,21 +520,21 @@ func RunServer(settings *Settings) {
 	subrouter.Path("/echo").HandlerFunc(store.echoHandler).Methods("GET")
 	subrouter.Path("/hello").HandlerFunc(store.helloHandler).Methods("GET")
 
-	subrouter.Path("/mapput/{key:[0-9A-Za-z]+}").HandlerFunc(store.mapPutHandler).Methods("PUT")
-	subrouter.Path("/mapget/{key:[0-9A-Za-z]+}").HandlerFunc(store.mapGetHandler).Methods("GET")
-	subrouter.Path("/mapdel/{key:[0-9A-Za-z]+}").HandlerFunc(store.mapDeleteHandler).Methods("DELETE")
+	subrouter.Path("/mapput/{key:[0-9A-Za-z_]+}").HandlerFunc(store.mapPutHandler).Methods("PUT")
+	subrouter.Path("/mapget/{key:[0-9A-Za-z_]+}").HandlerFunc(store.mapGetHandler).Methods("GET")
+	subrouter.Path("/mapdel/{key:[0-9A-Za-z_]+}").HandlerFunc(store.mapDeleteHandler).Methods("DELETE")
 
-	subrouter.Path("/strput/{key:[0-9A-Za-z]+}").HandlerFunc(store.stringPutHandler).Methods("PUT")
-	subrouter.Path("/strget/{key:[0-9A-Za-z]+}").HandlerFunc(store.stringGetHandler).Methods("GET")
-	subrouter.Path("/strdel/{key:[0-9A-Za-z]+}").HandlerFunc(store.stringDeleteHandler).Methods("DELETE")
+	subrouter.Path("/strput/{key:[0-9A-Za-z_]+}").HandlerFunc(store.stringPutHandler).Methods("PUT")
+	subrouter.Path("/strget/{key:[0-9A-Za-z_]+}").HandlerFunc(store.stringGetHandler).Methods("GET")
+	subrouter.Path("/strdel/{key:[0-9A-Za-z_]+}").HandlerFunc(store.stringDeleteHandler).Methods("DELETE")
 
-	subrouter.Path("/intput/{key:[0-9A-Za-z]+}").HandlerFunc(store.intPutHandler).Methods("PUT")
-	subrouter.Path("/intget/{key:[0-9A-Za-z]+}").HandlerFunc(store.intGetHandler).Methods("GET")
-	subrouter.Path("/intdel/{key:[0-9A-Za-z]+}").HandlerFunc(store.intDeleteHandler).Methods("DELETE")
+	subrouter.Path("/intput/{key:[0-9A-Za-z_]+}").HandlerFunc(store.intPutHandler).Methods("PUT")
+	subrouter.Path("/intget/{key:[0-9A-Za-z_]+}").HandlerFunc(store.intGetHandler).Methods("GET")
+	subrouter.Path("/intdel/{key:[0-9A-Za-z_]+}").HandlerFunc(store.intDeleteHandler).Methods("DELETE")
 
-	subrouter.Path("/floatput/{key:[0-9A-Za-z]+}").HandlerFunc(store.floatPutHandler).Methods("PUT")
-	subrouter.Path("/floatget/{key:[0-9A-Za-z]+}").HandlerFunc(store.floatGetHandler).Methods("GET")
-	subrouter.Path("/floatdel/{key:[0-9A-Za-z]+}").HandlerFunc(store.floatDeleteHandler).Methods("DELETE")
+	subrouter.Path("/floatput/{key:[0-9A-Za-z_]+}").HandlerFunc(store.floatPutHandler).Methods("PUT")
+	subrouter.Path("/floatget/{key:[0-9A-Za-z_]+}").HandlerFunc(store.floatGetHandler).Methods("GET")
+	subrouter.Path("/floatdel/{key:[0-9A-Za-z_]+}").HandlerFunc(store.floatDeleteHandler).Methods("DELETE")
 
 	log.Logger.Info("Listening %s", settings.Endpoint)
 

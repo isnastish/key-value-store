@@ -1,7 +1,5 @@
 package kvs
 
-// TODO: Add retries to makeHttpRequest function on specific error codes.
-
 import (
 	"bytes"
 	"context"
@@ -12,7 +10,11 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+
+	"github.com/isnastish/kvs/pkg/version"
 )
+
+// TODO: Add retries to makeHttpRequest function on specific error codes.
 
 type IntCmdCallback func(c *Client, ctx context.Context, cmd *IntCmd) *IntCmd
 type StrCmdCallback func(c *Client, ctx context.Context, cmd *StrCmd) *StrCmd
@@ -117,7 +119,7 @@ func init() {
 }
 
 func NewClient(settings *Settings) *Client {
-	baseURL, _ := url.Parse(fmt.Sprintf("http://%s/api/v1/", settings.Endpoint))
+	baseURL, _ := url.Parse(fmt.Sprintf("http://%s/api/%s/", settings.Endpoint, version.GetServiceVersion()))
 	return &Client{
 		settings: settings,
 		Client:   &http.Client{},
@@ -155,6 +157,10 @@ func (c *baseCmd) Status() string {
 
 func (c *baseCmd) StatusCode() int {
 	return c.statusCode
+}
+
+func (c *baseCmd) Args() []interface{} {
+	return c.args
 }
 
 func extendArgs(arr []interface{}, args ...interface{}) {
@@ -282,19 +288,19 @@ func (c *Client) F32Del(ctx context.Context, key string) *BoolCmd {
 	return cmd
 }
 
-func (c *Client) MapGet(ctx context.Context, key string, val map[string]string) *MapCmd {
+func (c *Client) MapGet(ctx context.Context, key string) *MapCmd {
 	cmdName := "mapget"
-	args := make([]interface{}, 3)
-	extendArgs(args, cmdName, key, val)
+	args := make([]interface{}, 2)
+	extendArgs(args, cmdName, key)
 	cmd := newMapCmd(args...)
 	_ = cmdgroup.mapCbtable[cmdName](c, ctx, cmd)
 	return cmd
 }
 
-func (c *Client) MapPut(ctx context.Context, key string) *IntCmd {
+func (c *Client) MapPut(ctx context.Context, key string, val map[string]string) *IntCmd {
 	cmdname := "mapput"
-	args := make([]interface{}, 2)
-	extendArgs(args, cmdname, key)
+	args := make([]interface{}, 3)
+	extendArgs(args, cmdname, key, val)
 	cmd := newIntCmd(args...)
 	_ = cmdgroup.intCbtable[cmdname](c, ctx, cmd)
 	return cmd
@@ -413,6 +419,8 @@ func f32GetCommand(client *Client, ctx context.Context, cmd *FloatCmd) *FloatCmd
 	if res.err != nil {
 		return cmd
 	}
+	// We have to be careful with the precision here,
+	// because some of the tests might fail.
 	val, _ := strconv.ParseFloat(string(res.contents), 32)
 	cmd.result = float32(val)
 	return cmd
