@@ -54,7 +54,7 @@ func Test_FloatRoundtrip(t *testing.T) {
 	const val float32 = 2.71828
 	const key = "epsilon"
 
-	putRes := client.F32Put(ctx, key, val)
+	putRes := client.F32Add(ctx, key, val)
 	assert.True(t, putRes.Error() == nil)
 	getRes := client.F32Get(ctx, key)
 	assert.True(t, getRes.Error() == nil)
