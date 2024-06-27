@@ -16,6 +16,34 @@ import (
 
 // TODO: Add retries to makeHttpRequest function on specific error codes.
 
+type cmd string
+
+const (
+	// All the entries in this table should be unique,
+	// since their values are used to assign callbacks to a command's callback table
+	// otherwise hash collisions are not avoided
+	cmdIntAdd    = cmd("intadd")
+	cmdIntGet    = cmd("intget")
+	cmdIntDel    = cmd("intdel")
+	cmdIntIncr   = cmd("intincr")
+	cmdIntIncrBy = cmd("intincrby")
+	cmdF32Add    = cmd("floatadd")
+	cmdF32Get    = cmd("floatget")
+	cmdF32Del    = cmd("floatdel")
+	cmdStrAdd    = cmd("stradd")
+	cmdStrGet    = cmd("strget")
+	cmdStrDel    = cmd("strdel")
+	cmdMapAdd    = cmd("mapadd")
+	cmdMapGet    = cmd("mapget")
+	cmdMapDel    = cmd("mapdel")
+	cmdUintAdd   = cmd("uintadd")
+	cmdUintGet   = cmd("uintget")
+	cmdUintDel   = cmd("uintdel")
+
+	cmdEcho  = cmd("echo")
+	cmdHello = cmd("hello")
+)
+
 type IntCmdCallback func(c *Client, ctx context.Context, cmd *IntCmd) *IntCmd
 type StrCmdCallback func(c *Client, ctx context.Context, cmd *StrCmd) *StrCmd
 type MapCmdCallback func(c *Client, ctx context.Context, cmd *MapCmd) *MapCmd
@@ -76,46 +104,48 @@ type BoolCmd struct {
 }
 
 type CmdGroup struct {
-	intCbtable  map[string]IntCmdCallback
-	strCbtable  map[string]StrCmdCallback
-	mapCbtable  map[string]MapCmdCallback
-	f32CbTable  map[string]F32CmdCallback
-	boolCbTable map[string]BoolCmdCallback
+	intCbtable  map[cmd]IntCmdCallback
+	strCbtable  map[cmd]StrCmdCallback
+	mapCbtable  map[cmd]MapCmdCallback
+	f32CbTable  map[cmd]F32CmdCallback
+	boolCbTable map[cmd]BoolCmdCallback
 }
 
-var cmdgroup *CmdGroup
+var cmdCallbacksTable *CmdGroup
 
 func newCmdGroup() *CmdGroup {
 	return &CmdGroup{
-		intCbtable:  make(map[string]IntCmdCallback),
-		strCbtable:  make(map[string]StrCmdCallback),
-		mapCbtable:  make(map[string]MapCmdCallback),
-		f32CbTable:  make(map[string]F32CmdCallback),
-		boolCbTable: make(map[string]BoolCmdCallback),
+		intCbtable:  make(map[cmd]IntCmdCallback),
+		strCbtable:  make(map[cmd]StrCmdCallback),
+		mapCbtable:  make(map[cmd]MapCmdCallback),
+		f32CbTable:  make(map[cmd]F32CmdCallback),
+		boolCbTable: make(map[cmd]BoolCmdCallback),
 	}
 }
 
 func init() {
-	cmdgroup = newCmdGroup()
+	cmdCallbacksTable = newCmdGroup()
 
-	cmdgroup.intCbtable["intget"] = intGetCommand
-	cmdgroup.intCbtable["intput"] = intPutCommand
-	cmdgroup.intCbtable["strput"] = strPutCommand
-	cmdgroup.intCbtable["mapput"] = mapPutCommand
-	cmdgroup.intCbtable["floatput"] = f32PutCommand
+	cmdCallbacksTable.intCbtable[cmdIntGet] = intGetCommand
+	cmdCallbacksTable.intCbtable[cmdIntGet] = intAddCommand
+	cmdCallbacksTable.intCbtable[cmdStrAdd] = strAddCommand
+	cmdCallbacksTable.intCbtable[cmdMapAdd] = mapAddCommand
+	cmdCallbacksTable.intCbtable[cmdF32Add] = f32AddCommand
+	cmdCallbacksTable.intCbtable[cmdIntIncr] = intIncrCommand
+	cmdCallbacksTable.intCbtable[cmdIntIncrBy] = intIncrByCommand
 
-	cmdgroup.strCbtable["strget"] = strGetCommand
-	cmdgroup.strCbtable["echo"] = echoCommand
-	cmdgroup.strCbtable["hello"] = helloCommand
+	cmdCallbacksTable.strCbtable[cmdStrGet] = strGetCommand
+	cmdCallbacksTable.strCbtable[cmdEcho] = echoCommand
+	cmdCallbacksTable.strCbtable[cmdHello] = helloCommand
 
-	cmdgroup.mapCbtable["mapget"] = mapGetCommand
+	cmdCallbacksTable.mapCbtable[cmdMapGet] = mapGetCommand
 
-	cmdgroup.boolCbTable["intdel"] = intDelCommand
-	cmdgroup.boolCbTable["strdel"] = strDelCommand
-	cmdgroup.boolCbTable["mapdel"] = mapDelCommand
-	cmdgroup.boolCbTable["floatdel"] = f32DelCommand
+	cmdCallbacksTable.boolCbTable[cmdIntDel] = intDelCommand
+	cmdCallbacksTable.boolCbTable[cmdStrDel] = strDelCommand
+	cmdCallbacksTable.boolCbTable[cmdMapDel] = mapDelCommand
+	cmdCallbacksTable.boolCbTable[cmdF32Del] = f32DelCommand
 
-	cmdgroup.f32CbTable["floatget"] = f32GetCommand
+	cmdCallbacksTable.f32CbTable[cmdF32Get] = f32GetCommand
 }
 
 func NewClient(settings *Settings) *Client {
@@ -190,128 +220,130 @@ func newFloatCmd(args ...interface{}) *FloatCmd {
 }
 
 func (c *Client) Echo(ctx context.Context, val string) *StrCmd {
-	cmdname := "echo"
 	args := make([]interface{}, 2)
-	extendArgs(args, cmdname, val)
+	extendArgs(args, cmdEcho, val)
 	cmd := newStrCmd(args...)
-	_ = cmdgroup.strCbtable[cmdname](c, ctx, cmd)
+	_ = cmdCallbacksTable.strCbtable[cmdEcho](c, ctx, cmd)
 	return cmd
 }
 
 func (c *Client) Hello(ctx context.Context) *StrCmd {
-	cmdname := "hello"
 	args := make([]interface{}, 1)
-	args[0] = cmdname
+	args[0] = cmdHello
 	cmd := newStrCmd(args...)
-	_ = cmdgroup.strCbtable[cmdname](c, ctx, cmd)
+	_ = cmdCallbacksTable.strCbtable[cmdHello](c, ctx, cmd)
 	return cmd
 }
 
 func (c *Client) StrGet(ctx context.Context, key string) *StrCmd {
-	cmdname := "strget"
 	args := make([]interface{}, 2)
-	extendArgs(args, cmdname, key)
+	extendArgs(args, cmdStrGet, key)
 	cmd := newStrCmd(args...)
-	_ = cmdgroup.strCbtable[cmdname](c, ctx, cmd)
+	_ = cmdCallbacksTable.strCbtable[cmdStrGet](c, ctx, cmd)
 	return cmd
 }
 
-func (c *Client) StrPut(ctx context.Context, key string, val string) *IntCmd {
-	cmdname := "strput"
+func (c *Client) StrAdd(ctx context.Context, key string, val string) *IntCmd {
 	args := make([]interface{}, 3)
-	extendArgs(args, cmdname, key, val)
+	extendArgs(args, cmdStrAdd, key, val)
 	cmd := newIntCmd(args...)
-	_ = cmdgroup.intCbtable[cmdname](c, ctx, cmd)
+	_ = cmdCallbacksTable.intCbtable[cmdStrAdd](c, ctx, cmd)
 	return cmd
 }
 
 func (c *Client) StrDel(ctx context.Context, key string) *BoolCmd {
-	cmdname := "strdel"
 	args := make([]interface{}, 2)
-	extendArgs(args, cmdname, key)
+	extendArgs(args, cmdStrDel, key)
 	cmd := newBoolCmd(args...)
-	_ = cmdgroup.boolCbTable[cmdname](c, ctx, cmd)
+	_ = cmdCallbacksTable.boolCbTable[cmdStrDel](c, ctx, cmd)
 	return cmd
 }
 
 func (c *Client) IntGet(ctx context.Context, key string) *IntCmd {
-	cmdname := "intget"
 	args := make([]interface{}, 2)
-	extendArgs(args, cmdname, key)
+	extendArgs(args, cmdIntGet, key)
 	cmd := newIntCmd(args...)
-	_ = cmdgroup.intCbtable[cmdname](c, ctx, cmd)
+	_ = cmdCallbacksTable.intCbtable[cmdIntGet](c, ctx, cmd)
 	return cmd
 }
 
-func (c *Client) IntPut(ctx context.Context, key string, val int) *IntCmd {
-	cmdname := "intput"
+func (c *Client) IntAdd(ctx context.Context, key string, val int) *IntCmd {
 	args := make([]interface{}, 3)
-	extendArgs(args, cmdname, key, val)
+	extendArgs(args, cmdIntAdd, key, val)
 	cmd := newIntCmd(args...)
-	_ = cmdgroup.intCbtable[cmdname](c, ctx, cmd)
+	_ = cmdCallbacksTable.intCbtable[cmdIntAdd](c, ctx, cmd)
 	return cmd
 }
 
 func (c *Client) IntDel(ctx context.Context, key string) *BoolCmd {
-	cmdname := "intdel"
 	args := make([]interface{}, 2)
-	extendArgs(args, cmdname, key)
+	extendArgs(args, cmdIntDel, key)
 	cmd := newBoolCmd(args...)
-	_ = cmdgroup.boolCbTable[cmdname](c, ctx, cmd)
+	_ = cmdCallbacksTable.boolCbTable[cmdIntDel](c, ctx, cmd)
+	return cmd
+}
+
+func (c *Client) IntIncr(ctx context.Context, key string) *IntCmd {
+	args := make([]interface{}, 2)
+	extendArgs(args, cmdIntIncr, key)
+	cmd := newIntCmd(args...)
+	_ = cmdCallbacksTable.intCbtable[cmdIntIncr](c, ctx, cmd)
+	return cmd
+}
+
+func (c *Client) IntIncrBy(ctx context.Context, key string, val int) *IntCmd {
+	args := make([]interface{}, 3)
+	extendArgs(args, cmdIntIncrBy, key, val)
+	cmd := newIntCmd(args...)
+	_ = cmdCallbacksTable.intCbtable[cmdIntIncrBy](c, ctx, cmd)
 	return cmd
 }
 
 func (c *Client) F32Get(ctx context.Context, key string) *FloatCmd {
-	cmdName := "floatget"
 	args := make([]interface{}, 2)
-	extendArgs(args, cmdName, key)
+	extendArgs(args, cmdF32Get, key)
 	cmd := newFloatCmd(args...)
-	_ = cmdgroup.f32CbTable[cmdName](c, ctx, cmd)
+	_ = cmdCallbacksTable.f32CbTable[cmdF32Get](c, ctx, cmd)
 	return cmd
 }
 
-func (c *Client) F32Put(ctx context.Context, key string, val float32) *IntCmd {
-	cmdName := "floatput"
+func (c *Client) F32Add(ctx context.Context, key string, val float32) *IntCmd {
 	args := make([]interface{}, 3)
-	extendArgs(args, cmdName, key, val)
+	extendArgs(args, cmdF32Add, key, val)
 	cmd := newIntCmd(args...)
-	_ = cmdgroup.intCbtable[cmdName](c, ctx, cmd)
+	_ = cmdCallbacksTable.intCbtable[cmdF32Add](c, ctx, cmd)
 	return cmd
 }
 
 func (c *Client) F32Del(ctx context.Context, key string) *BoolCmd {
-	cmdName := "floatdel"
 	args := make([]interface{}, 2)
-	extendArgs(args, cmdName, key)
+	extendArgs(args, cmdF32Del, key)
 	cmd := newBoolCmd(args...)
-	_ = cmdgroup.boolCbTable[cmdName](c, ctx, cmd)
+	_ = cmdCallbacksTable.boolCbTable[cmdF32Del](c, ctx, cmd)
 	return cmd
 }
 
 func (c *Client) MapGet(ctx context.Context, key string) *MapCmd {
-	cmdName := "mapget"
 	args := make([]interface{}, 2)
-	extendArgs(args, cmdName, key)
+	extendArgs(args, cmdMapGet, key)
 	cmd := newMapCmd(args...)
-	_ = cmdgroup.mapCbtable[cmdName](c, ctx, cmd)
+	_ = cmdCallbacksTable.mapCbtable[cmdMapGet](c, ctx, cmd)
 	return cmd
 }
 
-func (c *Client) MapPut(ctx context.Context, key string, val map[string]string) *IntCmd {
-	cmdname := "mapput"
+func (c *Client) MapAdd(ctx context.Context, key string, val map[string]string) *IntCmd {
 	args := make([]interface{}, 3)
-	extendArgs(args, cmdname, key, val)
+	extendArgs(args, cmdMapAdd, key, val)
 	cmd := newIntCmd(args...)
-	_ = cmdgroup.intCbtable[cmdname](c, ctx, cmd)
+	_ = cmdCallbacksTable.intCbtable[cmdMapAdd](c, ctx, cmd)
 	return cmd
 }
 
 func (c *Client) MapDel(ctx context.Context, key string) *BoolCmd {
-	cmdname := "mapdel"
 	args := make([]interface{}, 2)
-	extendArgs(args, cmdname, key)
+	extendArgs(args, cmdMapDel, key)
 	cmd := newBoolCmd(args...)
-	_ = cmdgroup.boolCbTable[cmdname](c, ctx, cmd)
+	_ = cmdCallbacksTable.boolCbTable[cmdMapDel](c, ctx, cmd)
 	return cmd
 }
 
@@ -349,7 +381,7 @@ func strGetCommand(client *Client, ctx context.Context, cmd *StrCmd) *StrCmd {
 	return cmd
 }
 
-func strPutCommand(client *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
+func strAddCommand(client *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
 	path := cmd.args[0].(string) + "/" + cmd.args[1].(string)
 	val := cmd.args[2].(string)
 	res := makeHttpRequest(client, ctx, http.MethodPut, path, bytes.NewBufferString(val))
@@ -389,7 +421,7 @@ func intGetCommand(client *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
 	return cmd
 }
 
-func intPutCommand(client *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
+func intAddCommand(client *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
 	path := cmd.args[0].(string) + "/" + cmd.args[1].(string)
 	val := fmt.Sprintf("%d", cmd.args[2].(int))
 	res := makeHttpRequest(client, ctx, http.MethodPut, path, bytes.NewBufferString(val))
@@ -412,6 +444,41 @@ func intDelCommand(client *Client, ctx context.Context, cmd *BoolCmd) *BoolCmd {
 	return cmd
 }
 
+func intIncrCommand(client *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
+	path := cmd.args[0].(string) + "/" + cmd.args[1].(string)
+	res := makeHttpRequest(client, ctx, http.MethodPut, path, nil)
+	cmd.cmdStatus = res.cmdStatus
+	if res.err != nil {
+		cmd.err = res.err
+		return cmd
+	}
+	val, err := strconv.ParseInt(string(res.contents), 0, 32)
+	if err != nil {
+		cmd.err = res.err
+		return cmd
+	}
+	cmd.result = int(val)
+	return cmd
+}
+
+func intIncrByCommand(client *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
+	path := cmd.args[0].(string) + "/" + cmd.args[1].(string)
+	val := strconv.FormatInt(cmd.args[2].(int64), 10)
+	res := makeHttpRequest(client, ctx, http.MethodPut, path, bytes.NewBufferString(val))
+	cmd.cmdStatus = res.cmdStatus
+	if res.err != nil {
+		cmd.err = res.err
+		return cmd
+	}
+	resVal, err := strconv.ParseInt(string(res.contents), 0, 32)
+	if err != nil {
+		cmd.err = res.err
+		return cmd
+	}
+	cmd.result = int(resVal)
+	return cmd
+}
+
 func f32GetCommand(client *Client, ctx context.Context, cmd *FloatCmd) *FloatCmd {
 	path := cmd.args[0].(string) + "/" + cmd.args[1].(string)
 	res := makeHttpRequest(client, ctx, http.MethodGet, path, nil)
@@ -426,7 +493,7 @@ func f32GetCommand(client *Client, ctx context.Context, cmd *FloatCmd) *FloatCmd
 	return cmd
 }
 
-func f32PutCommand(client *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
+func f32AddCommand(client *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
 	path := cmd.args[0].(string) + "/" + cmd.args[1].(string)
 	val := fmt.Sprintf("%e", cmd.args[2].(float32))
 	res := makeHttpRequest(client, ctx, http.MethodPut, path, bytes.NewBufferString(val))
@@ -465,7 +532,7 @@ func mapGetCommand(c *Client, ctx context.Context, cmd *MapCmd) *MapCmd {
 	return cmd
 }
 
-func mapPutCommand(c *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
+func mapAddCommand(c *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
 	path := cmd.args[0].(string) + "/" + cmd.args[1].(string)
 	hashmap := cmd.args[2].(map[string]string)
 	val, _ := json.Marshal(hashmap)
@@ -550,7 +617,8 @@ func makeHttpRequest(client *Client, ctx context.Context, httpMethod string, pat
 		result.contents = []byte(resp.Header.Get("Deleted"))
 	}
 
-	if httpMethod == http.MethodGet {
+	// Parse the body for all methods? We will need them for Incr/IncrBy methods
+	if httpMethod == http.MethodGet || httpMethod == http.MethodPut {
 		bytes, _ := io.ReadAll(resp.Body)
 		defer resp.Body.Close()
 		result.contents = bytes

@@ -1,4 +1,3 @@
-// TODO: Explore random string generation
 package kvs
 
 import (
@@ -35,7 +34,7 @@ func Test_IntRoundtrip(t *testing.T) {
 	const val int = 9999997
 	const key = "id"
 
-	putRes := client.IntPut(ctx, key, val)
+	putRes := client.IntAdd(ctx, key, val)
 	assert.True(t, putRes.Error() == nil)
 	getRes := client.IntGet(ctx, key)
 	assert.True(t, getRes.Error() == nil)
@@ -76,7 +75,7 @@ func Test_StringRoundtrip(t *testing.T) {
 	const val string = "Hello! This is a test string. I could have computed a checksum using MD5 or SHA256 algorithms here, but I am too lazzzzzy"
 	const key = "dummy_String"
 
-	putRes := client.StrPut(ctx, key, val)
+	putRes := client.StrAdd(ctx, key, val)
 	assert.True(t, putRes.Error() == nil)
 	getRes := client.StrGet(ctx, key)
 	assert.True(t, getRes.Error() == nil)
@@ -97,7 +96,7 @@ func Test_HashMapRoundtrip(t *testing.T) {
 	val := map[string]string{"first_entry": "fff0xx", "second_entry": "RRRRRR"}
 	const key = "randomMap"
 
-	putRes := client.MapPut(ctx, key, val)
+	putRes := client.MapAdd(ctx, key, val)
 	assert.True(t, putRes.Error() == nil)
 	getRes := client.MapGet(ctx, key)
 	assert.True(t, getRes.Error() == nil)
@@ -109,5 +108,3 @@ func Test_HashMapRoundtrip(t *testing.T) {
 	getRes = client.MapGet(ctx, key)
 	assert.True(t, getRes.Error() != nil)
 }
-
-// TODO: Add test for value overrides (key is the same, but the value is different)

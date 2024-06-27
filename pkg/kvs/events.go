@@ -4,35 +4,34 @@ import (
 	"time"
 )
 
-type EventKind int8
+const maxEventCount = ^uint64(0)
 
-const MaxEventId = ^uint64(0)
+type StorageType int
+type EventType int
 
 const (
-	_ EventKind = iota
-	EventKindPut
-	EventKindGet
-	EventKindDelete
+	_ StorageType = iota
+	storageTypeInt
+	storageTypeFloat
+	storageTypeUint
+	storageTypeString
+	storageTypeMap
 )
 
-func (e EventKind) toStr() string {
-	switch e {
-	case EventKindPut:
-		return "EventPut"
-	case EventKindGet:
-		return "EventGet"
-	case EventKindDelete:
-		return "EventDelete"
-	default:
-		// We don't know how to handle unknown events
-		panic("Unknown event")
-	}
-}
+const (
+	_ EventType = iota
+	eventTypeAdd
+	eventTypeGet
+	eventTypeDel
+	eventTypeIncr
+	eventTypeIncrBy
+)
 
 type Event struct {
-	id   uint64
-	kind EventKind
-	key  string
-	val  interface{}
-	time time.Time
+	StorageType StorageType
+	Id          uint64
+	Type        EventType
+	Key         string
+	Val         interface{}
+	Timestamp   time.Time
 }
