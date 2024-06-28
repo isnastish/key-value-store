@@ -15,33 +15,30 @@ import (
 )
 
 // TODO: Add retries to makeHttpRequest function on specific error codes.
-
-type cmd string
-
 const (
 	// All the entries in this table should be unique,
 	// since their values are used to assign callbacks to a command's callback table
 	// otherwise hash collisions are not avoided
-	cmdIntAdd    = cmd("intadd")
-	cmdIntGet    = cmd("intget")
-	cmdIntDel    = cmd("intdel")
-	cmdIntIncr   = cmd("intincr")
-	cmdIntIncrBy = cmd("intincrby")
-	cmdF32Add    = cmd("floatadd")
-	cmdF32Get    = cmd("floatget")
-	cmdF32Del    = cmd("floatdel")
-	cmdStrAdd    = cmd("stradd")
-	cmdStrGet    = cmd("strget")
-	cmdStrDel    = cmd("strdel")
-	cmdMapAdd    = cmd("mapadd")
-	cmdMapGet    = cmd("mapget")
-	cmdMapDel    = cmd("mapdel")
-	cmdUintAdd   = cmd("uintadd")
-	cmdUintGet   = cmd("uintget")
-	cmdUintDel   = cmd("uintdel")
+	cmdIntAdd    = "intadd"
+	cmdIntGet    = "intget"
+	cmdIntDel    = "intdel"
+	cmdIntIncr   = "intincr"
+	cmdIntIncrBy = "intincrby"
+	cmdF32Add    = "floatadd"
+	cmdF32Get    = "floatget"
+	cmdF32Del    = "floatdel"
+	cmdStrAdd    = "stradd"
+	cmdStrGet    = "strget"
+	cmdStrDel    = "strdel"
+	cmdMapAdd    = "mapadd"
+	cmdMapGet    = "mapget"
+	cmdMapDel    = "mapdel"
+	cmdUintAdd   = "uintadd"
+	cmdUintGet   = "uintget"
+	cmdUintDel   = "uintdel"
 
-	cmdEcho  = cmd("echo")
-	cmdHello = cmd("hello")
+	cmdEcho  = "echo"
+	cmdHello = "hello"
 )
 
 type IntCmdCallback func(c *Client, ctx context.Context, cmd *IntCmd) *IntCmd
@@ -104,22 +101,22 @@ type BoolCmd struct {
 }
 
 type CmdGroup struct {
-	intCbtable  map[cmd]IntCmdCallback
-	strCbtable  map[cmd]StrCmdCallback
-	mapCbtable  map[cmd]MapCmdCallback
-	f32CbTable  map[cmd]F32CmdCallback
-	boolCbTable map[cmd]BoolCmdCallback
+	intCbtable  map[string]IntCmdCallback
+	strCbtable  map[string]StrCmdCallback
+	mapCbtable  map[string]MapCmdCallback
+	f32CbTable  map[string]F32CmdCallback
+	boolCbTable map[string]BoolCmdCallback
 }
 
 var cmdCallbacksTable *CmdGroup
 
 func newCmdGroup() *CmdGroup {
 	return &CmdGroup{
-		intCbtable:  make(map[cmd]IntCmdCallback),
-		strCbtable:  make(map[cmd]StrCmdCallback),
-		mapCbtable:  make(map[cmd]MapCmdCallback),
-		f32CbTable:  make(map[cmd]F32CmdCallback),
-		boolCbTable: make(map[cmd]BoolCmdCallback),
+		intCbtable:  make(map[string]IntCmdCallback),
+		strCbtable:  make(map[string]StrCmdCallback),
+		mapCbtable:  make(map[string]MapCmdCallback),
+		f32CbTable:  make(map[string]F32CmdCallback),
+		boolCbTable: make(map[string]BoolCmdCallback),
 	}
 }
 
@@ -127,7 +124,7 @@ func init() {
 	cmdCallbacksTable = newCmdGroup()
 
 	cmdCallbacksTable.intCbtable[cmdIntGet] = intGetCommand
-	cmdCallbacksTable.intCbtable[cmdIntGet] = intAddCommand
+	cmdCallbacksTable.intCbtable[cmdIntAdd] = intAddCommand
 	cmdCallbacksTable.intCbtable[cmdStrAdd] = strAddCommand
 	cmdCallbacksTable.intCbtable[cmdMapAdd] = mapAddCommand
 	cmdCallbacksTable.intCbtable[cmdF32Add] = f32AddCommand

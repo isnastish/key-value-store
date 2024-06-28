@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"sync"
+	"time"
 	"unicode"
 
 	"github.com/gorilla/mux"
@@ -88,7 +89,7 @@ func initStorage() {
 	globalStorage.table[storageTypeInt] = newIntStorage()
 	globalStorage.table[storageTypeFloat] = newFloatStorage()
 	globalStorage.table[storageTypeString] = newStrStorage()
-	globalStorage.table[storageTypeMap] = newStrStorage()
+	globalStorage.table[storageTypeMap] = newMapStorage()
 }
 
 func newMapStorage() *MapStorage {
@@ -238,7 +239,7 @@ func (s *FloatStorage) Add(hashKey string, cmd *Cmd) *Cmd {
 	s.Lock()
 	// Consider the precision in the future. Maybe we have to suply the precision
 	// together with the value itself
-	s.data[hashKey] = cmd.args[0].(float32)
+	s.data[hashKey] = float32(cmd.args[0].(float64))
 	s.Unlock()
 	return cmd
 }
@@ -542,7 +543,7 @@ func floatDeleteHandler(w http.ResponseWriter, r *http.Request) {
 
 	key := mux.Vars(r)["key"]
 	cmd := globalStorage.table[storageTypeFloat].Del(key, newCmd())
-	if cmd != nil {
+	if cmd.err != nil {
 		http.Error(w, cmd.err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -556,6 +557,11 @@ func floatDeleteHandler(w http.ResponseWriter, r *http.Request) {
 
 func echoHandler(w http.ResponseWriter, r *http.Request) {
 	log.Logger.Info("Endpoint %s, method %s", r.RequestURI, r.Method)
+
+	// TODO: Experiment with request cancelations
+	// select {
+	// case <-r.Context().Done():
+	// }
 
 	buf, err := io.ReadAll(r.Body)
 	defer r.Body.Close()
@@ -669,6 +675,9 @@ func RunServer(settings *Settings) {
 	}
 
 	router := mux.NewRouter()
+	// /path/ and /path will trigger the same endpoint
+	// router = router.StrictSlash(true)
+
 	subrouter := router.PathPrefix(fmt.Sprintf("/api/%s/", version.GetServiceVersion())).Subrouter()
 
 	// NOTE: The echo endpoint should be bound to GET method and contain a body,
@@ -678,27 +687,48 @@ func RunServer(settings *Settings) {
 	subrouter.Path("/echo").HandlerFunc(echoHandler).Methods("GET")
 	subrouter.Path("/hello").HandlerFunc(helloHandler).Methods("GET")
 
-	subrouter.Path("/mapput/{key:[0-9A-Za-z_]+}").HandlerFunc(mapAddHandler).Methods("PUT")
+	subrouter.Path("/mapadd/{key:[0-9A-Za-z_]+}").HandlerFunc(mapAddHandler).Methods("PUT")
 	subrouter.Path("/mapget/{key:[0-9A-Za-z_]+}").HandlerFunc(mapGetHandler).Methods("GET")
 	subrouter.Path("/mapdel/{key:[0-9A-Za-z_]+}").HandlerFunc(mapDeleteHandler).Methods("DELETE")
 
-	subrouter.Path("/strput/{key:[0-9A-Za-z_]+}").HandlerFunc(stringAddHandler).Methods("PUT")
+	subrouter.Path("/stradd/{key:[0-9A-Za-z_]+}").HandlerFunc(stringAddHandler).Methods("PUT")
 	subrouter.Path("/strget/{key:[0-9A-Za-z_]+}").HandlerFunc(stringGetHandler).Methods("GET")
 	subrouter.Path("/strdel/{key:[0-9A-Za-z_]+}").HandlerFunc(stringDeleteHandler).Methods("DELETE")
 
-	subrouter.Path("/intput/{key:[0-9A-Za-z_]+}").HandlerFunc(intAddHandler).Methods("PUT")
+	subrouter.Path("/intadd/{key:[0-9A-Za-z_]+}").HandlerFunc(intAddHandler).Methods("PUT")
 	subrouter.Path("/intget/{key:[0-9A-Za-z_]+}").HandlerFunc(intGetHandler).Methods("GET")
 	subrouter.Path("/intdel/{key:[0-9A-Za-z_]+}").HandlerFunc(intDeleteHandler).Methods("DELETE")
 	subrouter.Path("/intincr/{key:[0-9A-Za-z_]+}").HandlerFunc(intIncrHandler).Methods("PUT")
 	subrouter.Path("/intincrby/{key:[0-9A-Za-z_]+}").HandlerFunc(intIncrByHandler).Methods("PUT")
 
-	subrouter.Path("/floatput/{key:[0-9A-Za-z_]+}").HandlerFunc(floatAddHandler).Methods("PUT")
+	subrouter.Path("/floatadd/{key:[0-9A-Za-z_]+}").HandlerFunc(floatAddHandler).Methods("PUT")
 	subrouter.Path("/floatget/{key:[0-9A-Za-z_]+}").HandlerFunc(floatGetHandler).Methods("GET")
 	subrouter.Path("/floatdel/{key:[0-9A-Za-z_]+}").HandlerFunc(floatDeleteHandler).Methods("DELETE")
 
-	log.Logger.Info("Listening %s", settings.Endpoint)
-
-	if err := http.ListenAndServe(settings.Endpoint, router); err != nil {
-		log.Logger.Panic("Server error %v", err)
+	// https://stackoverflow.com/questions/39320025/how-to-stop-http-listenandserve
+	httpServer := http.Server{
+		Addr:    settings.Endpoint,
+		Handler: router,
 	}
+
+	serverWaitGroup := sync.WaitGroup{}
+	serverWaitGroup.Add(1)
+	go func() {
+		defer serverWaitGroup.Done()
+		log.Logger.Info("Listening %s", settings.Endpoint)
+		if err := httpServer.ListenAndServe(); err != http.ErrServerClosed {
+			log.Logger.Panic("Server error %v", err)
+			return
+		}
+	}()
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10000*time.Millisecond)
+	defer cancel()
+	if err := httpServer.Shutdown(shutdownCtx); err != nil {
+		log.Logger.Panic("Server shutdown failed")
+	}
+
+	serverWaitGroup.Wait()
+
+	log.Logger.Info("Server was closed gracefully")
 }

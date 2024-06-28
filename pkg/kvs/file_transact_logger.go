@@ -128,6 +128,10 @@ func (l *FileTransactionLogger) readEvents() (<-chan Event, <-chan error) {
 				errors <- err
 				break
 			}
+			if err == io.EOF {
+				errors <- io.EOF
+				break
+			}
 			events <- event
 		}
 		// set seek value here?

@@ -2,9 +2,18 @@ package kvs
 
 import (
 	"context"
+	"fmt"
+	"net/http"
 	"testing"
+	"time"
+
+	"github.com/gorilla/mux"
+	_ "go.uber.org/goleak"
 
 	"github.com/stretchr/testify/assert"
+
+	"github.com/isnastish/kvs/pkg/log"
+	"github.com/isnastish/kvs/pkg/version"
 )
 
 var settings = &Settings{
@@ -107,4 +116,45 @@ func Test_HashMapRoundtrip(t *testing.T) {
 	*getRes = MapCmd{}
 	getRes = client.MapGet(ctx, key)
 	assert.True(t, getRes.Error() != nil)
+}
+
+func Test_IntIncr(t *testing.T) {
+
+}
+
+func Test_IntIncBy(t *testing.T) {
+
+}
+
+func Test_CancelRequestIfServerIsHanding(t *testing.T) {
+	// Use the development server here
+	// defer goleak.VerifyNone(t)
+
+	// Creating a subroute migth not be necessary
+	router := mux.NewRouter()
+	subRouter := router.PathPrefix(fmt.Sprintf("/api/%s/", version.GetServiceVersion())).Subrouter()
+	subRouter.Path("/echo").HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		empty := make(chan bool, 1)
+		<-empty
+	}).Methods("PUT")
+
+	go func() {
+		// TODO: Figure out how to tear down http server gracefully
+		log.Logger.Info("Listening %s", settings.Endpoint)
+		if err := http.ListenAndServe(settings.Endpoint, router); err != nil {
+			log.Logger.Panic("Server fatal error %v", err)
+			assert.True(t, false)
+		}
+	}()
+
+	client := NewClient(settings)
+	ctx, cancel := context.WithTimeout(context.Background(), 5000*time.Millisecond)
+	defer cancel()
+
+	echoRes := client.Echo(ctx, "eChO EcHo ECHO echo")
+	log.Logger.Info("Echo result %v", echoRes.Result())
+}
+
+func Test_TrailingSlashPointsToTheSameRoute(t *testing.T) {
+
 }
