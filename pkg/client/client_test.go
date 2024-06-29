@@ -2,23 +2,32 @@ package kvs
 
 import (
 	"context"
-	"fmt"
-	"net/http"
 	"testing"
-	"time"
-
-	"github.com/gorilla/mux"
-	_ "go.uber.org/goleak"
 
 	"github.com/stretchr/testify/assert"
-
-	"github.com/isnastish/kvs/pkg/log"
-	"github.com/isnastish/kvs/pkg/version"
+	_ "go.uber.org/goleak"
 )
 
 var settings = &Settings{
 	Endpoint:     ":8080",
 	RetriesCount: 3,
+}
+
+func zero(v interface{}) {
+	switch v.(type) {
+	case *IntCmd:
+		(*v.(*IntCmd)) = IntCmd{}
+	case *BoolCmd:
+		(*v.(*BoolCmd)) = BoolCmd{}
+	case *StrCmd:
+		(*v.(*StrCmd)) = StrCmd{}
+	case *FloatCmd:
+		(*v.(*FloatCmd)) = FloatCmd{}
+	case *MapCmd:
+		(*v.(*MapCmd)) = MapCmd{}
+	default:
+		panic("Invalid type")
+	}
 }
 
 func Test_Echo(t *testing.T) {
@@ -50,7 +59,7 @@ func Test_IntRoundtrip(t *testing.T) {
 	assert.Equal(t, val, getRes.Result())
 	delRes := client.IntDel(ctx, key)
 	assert.True(t, delRes.Error() == nil)
-	*getRes = IntCmd{}
+	zero(getRes)
 	getRes = client.IntGet(ctx, key)
 	assert.True(t, getRes.Error() != nil)
 }
@@ -71,7 +80,7 @@ func Test_FloatRoundtrip(t *testing.T) {
 	delRes := client.F32Del(ctx, key)
 	assert.True(t, delRes.Error() == nil)
 	assert.True(t, delRes.Result())
-	*getRes = FloatCmd{}
+	zero(getRes)
 	getRes = client.F32Get(ctx, key)
 	assert.True(t, getRes.Error() != nil)
 }
@@ -92,7 +101,7 @@ func Test_StringRoundtrip(t *testing.T) {
 	delRes := client.StrDel(ctx, key)
 	assert.True(t, delRes.Error() == nil)
 	assert.True(t, delRes.Result())
-	*getRes = StrCmd{}
+	zero(getRes)
 	getRes = client.StrGet(ctx, key)
 	assert.True(t, getRes.Error() != nil)
 }
@@ -113,48 +122,57 @@ func Test_HashMapRoundtrip(t *testing.T) {
 	delRes := client.MapDel(ctx, key)
 	assert.True(t, delRes.Error() == nil)
 	assert.True(t, delRes.Result())
-	*getRes = MapCmd{}
+	zero(getRes)
 	getRes = client.MapGet(ctx, key)
 	assert.True(t, getRes.Error() != nil)
 }
 
 func Test_IntIncr(t *testing.T) {
+	client := NewClient(settings)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
+	zero := func(res *IntCmd) {
+		*res = IntCmd{}
+	}
+
+	const key = "messsageId"
+	incrRes := client.IntIncr(ctx, key)
+	assert.Equal(t, 0, incrRes.Result())
+	zero(incrRes)
+	incrRes = client.IntIncr(ctx, key)
+	assert.Equal(t, 1, incrRes.Result())
+	zero(incrRes)
+
+	// 1024 http request... And open field for optimizations (put them into a single http request)
+	for i := 2; i < 1026; i++ {
+		incrRes = client.IntIncr(ctx, key)
+		assert.Equal(t, i, incrRes.Result())
+		zero(incrRes)
+	}
+	delRes := client.Del(ctx, key)
+	assert.True(t, delRes.Result())
 }
 
 func Test_IntIncBy(t *testing.T) {
-
-}
-
-func Test_CancelRequestIfServerIsHanding(t *testing.T) {
-	// Use the development server here
-	// defer goleak.VerifyNone(t)
-
-	// Creating a subroute migth not be necessary
-	router := mux.NewRouter()
-	subRouter := router.PathPrefix(fmt.Sprintf("/api/%s/", version.GetServiceVersion())).Subrouter()
-	subRouter.Path("/echo").HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		empty := make(chan bool, 1)
-		<-empty
-	}).Methods("PUT")
-
-	go func() {
-		// TODO: Figure out how to tear down http server gracefully
-		log.Logger.Info("Listening %s", settings.Endpoint)
-		if err := http.ListenAndServe(settings.Endpoint, router); err != nil {
-			log.Logger.Panic("Server fatal error %v", err)
-			assert.True(t, false)
-		}
-	}()
-
 	client := NewClient(settings)
-	ctx, cancel := context.WithTimeout(context.Background(), 5000*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	echoRes := client.Echo(ctx, "eChO EcHo ECHO echo")
-	log.Logger.Info("Echo result %v", echoRes.Result())
+	const key = "number"
+	incrRes := client.IntIncrBy(ctx, key, 64)
+	assert.Equal(t, 0, incrRes.Result())
+	zero(incrRes)
+	incrRes = client.IntIncrBy(ctx, key, 3)
+	assert.Equal(t, 64, incrRes.Result())
+	delRes := client.Del(ctx, key)
+	assert.True(t, delRes.Result())
 }
 
-func Test_TrailingSlashPointsToTheSameRoute(t *testing.T) {
-
-}
+// func Test_KillServer(t *testing.T) {
+// 	client := NewClient(settings)
+// 	ctx, cancel := context.WithCancel(context.Background())
+// 	defer cancel()
+// 	killRes := client.Kill(ctx)
+// 	assert.Equal(t, 200, killRes.StatusCode())
+// }

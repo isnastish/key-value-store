@@ -26,6 +26,8 @@ type FileTransactionLogger struct {
 }
 
 func newFileTransactionsLogger(filePath string) (*FileTransactionLogger, error) {
+	gob.Register(map[string]string{})
+
 	// Seek method cannot be used on files created with O_APPEND file,
 	// we would have to advance the seek pointer manually
 	// Since we always read the file first, readEvents will advance the seek ptr,
@@ -57,10 +59,10 @@ func (l *FileTransactionLogger) writeEvent(eventType EventType, storageType Stor
 		Timestamp:   time.Now()}
 }
 
-func (l *FileTransactionLogger) writeEvents(ctx context.Context) {
+func (l *FileTransactionLogger) writeEvents(serverShutdownCtx context.Context) {
 	defer l.file.Close()
 
-	events := make(chan Event, 32)
+	events := make(chan Event, 16)
 	errors := make(chan error, 1)
 
 	l.events = events
@@ -78,23 +80,31 @@ func (l *FileTransactionLogger) writeEvents(ctx context.Context) {
 	for {
 		select {
 		case event := <-events:
-			// Might be accessed by multiple threads?
 			event.Id = l.id
 			if !encodeEvent(&event) {
 				return
 			}
 			l.id++
 
-		case <-ctx.Done():
-			// If the service terminates for some reason,
-			// we want to save all the events, which are left in the buffer.
-			// Otherwise they might get lost.
-			for event := range events {
-				event.Id = l.id
-				if !encodeEvent(&event) {
-					return
+			log.Logger.Info("Wrote %s, id %d, storage %s, time %s",
+				event.Type.toStr(),
+				event.Id,
+				event.StorageType.toStr(),
+				event.Timestamp.Format(time.TimeOnly),
+			)
+
+		case <-serverShutdownCtx.Done():
+			// If the server terminated, we have to write all the pending events,
+			// otherwise the events might get lost, which will be imposible to replay them.
+			if len(events) != 0 {
+				log.Logger.Info("Finishing writing pending events")
+				for event := range events {
+					event.Id = l.id
+					if !encodeEvent(&event) {
+						return
+					}
+					l.id++
 				}
-				l.id++
 			}
 			return
 		}
@@ -105,20 +115,11 @@ func (l *FileTransactionLogger) readEvents() (<-chan Event, <-chan error) {
 	events := make(chan Event)
 	errors := make(chan error, 1)
 
-	// NOTE: Be careful with io.EOF
 	go func() {
 		// The receiver still will be able to read from closed channels
 		// but not write to them.
 		defer close(events)
 		defer close(errors)
-
-		// Is it even necessary?
-		_, err := l.file.Seek(0, io.SeekStart)
-		if err != nil {
-			log.Logger.Error("Failed to set the file offset for reading %v", err)
-			errors <- err
-			return
-		}
 
 		for {
 			event := Event{}
@@ -134,7 +135,6 @@ func (l *FileTransactionLogger) readEvents() (<-chan Event, <-chan error) {
 			}
 			events <- event
 		}
-		// set seek value here?
 	}()
 
 	return events, errors

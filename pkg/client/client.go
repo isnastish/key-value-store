@@ -39,6 +39,8 @@ const (
 
 	cmdEcho  = "echo"
 	cmdHello = "hello"
+	cmdKill  = "kill"
+	cmdDel   = "del"
 )
 
 type IntCmdCallback func(c *Client, ctx context.Context, cmd *IntCmd) *IntCmd
@@ -100,7 +102,7 @@ type BoolCmd struct {
 	result bool
 }
 
-type CmdGroup struct {
+type CmdTable struct {
 	intCbtable  map[string]IntCmdCallback
 	strCbtable  map[string]StrCmdCallback
 	mapCbtable  map[string]MapCmdCallback
@@ -108,10 +110,10 @@ type CmdGroup struct {
 	boolCbTable map[string]BoolCmdCallback
 }
 
-var cmdCallbacksTable *CmdGroup
+var cmdCallbacksTable *CmdTable
 
-func newCmdGroup() *CmdGroup {
-	return &CmdGroup{
+func newCmdGroup() *CmdTable {
+	return &CmdTable{
 		intCbtable:  make(map[string]IntCmdCallback),
 		strCbtable:  make(map[string]StrCmdCallback),
 		mapCbtable:  make(map[string]MapCmdCallback),
@@ -141,6 +143,10 @@ func init() {
 	cmdCallbacksTable.boolCbTable[cmdStrDel] = strDelCommand
 	cmdCallbacksTable.boolCbTable[cmdMapDel] = mapDelCommand
 	cmdCallbacksTable.boolCbTable[cmdF32Del] = f32DelCommand
+	// callback for killing the server
+	cmdCallbacksTable.boolCbTable[cmdKill] = killCommand
+	// del a key from any type of storage
+	cmdCallbacksTable.boolCbTable[cmdDel] = delCommand
 
 	cmdCallbacksTable.f32CbTable[cmdF32Get] = f32GetCommand
 }
@@ -229,6 +235,20 @@ func (c *Client) Hello(ctx context.Context) *StrCmd {
 	args[0] = cmdHello
 	cmd := newStrCmd(args...)
 	_ = cmdCallbacksTable.strCbtable[cmdHello](c, ctx, cmd)
+	return cmd
+}
+
+func (c *Client) Kill(ctx context.Context) *BoolCmd {
+	args := make([]interface{}, 1)
+	args[0] = cmdKill
+	cmd := newBoolCmd(args...)
+	_ = cmdCallbacksTable.boolCbTable[cmdKill](c, ctx, cmd)
+	return cmd
+}
+
+func (c *Client) Del(ctx context.Context, key string) *BoolCmd {
+	cmd := newBoolCmd(cmdDel, key)
+	_ = cmdCallbacksTable.boolCbTable[cmdDel](c, ctx, cmd)
 	return cmd
 }
 
@@ -344,11 +364,14 @@ func (c *Client) MapDel(ctx context.Context, key string) *BoolCmd {
 	return cmd
 }
 
+// func (c *Client) MapAdd(ctx context.Context, key string, values ...interface{}) {
+// }
+
 func helloCommand(client *Client, ctx context.Context, cmd *StrCmd) *StrCmd {
 	path := cmd.args[0].(string)
 	res := makeHttpRequest(client, ctx, http.MethodGet, path, nil)
 	cmd.cmdStatus = res.cmdStatus
-	if res.err != nil {
+	if cmd.err != nil {
 		return cmd
 	}
 	cmd.result = string(res.contents)
@@ -360,10 +383,30 @@ func echoCommand(client *Client, ctx context.Context, cmd *StrCmd) *StrCmd {
 	val := cmd.args[1].(string)
 	res := makeHttpRequest(client, ctx, http.MethodGet, path, bytes.NewBufferString(val))
 	cmd.cmdStatus = res.cmdStatus
-	if res.err != nil {
+	if cmd.err != nil {
 		return cmd
 	}
 	cmd.result = string(res.contents)
+	return cmd
+}
+
+func killCommand(client *Client, ctx context.Context, cmd *BoolCmd) *BoolCmd {
+	path := cmd.args[0].(string)
+	res := makeHttpRequest(client, ctx, http.MethodHead, path, nil)
+	cmd.cmdStatus = res.cmdStatus
+	return cmd
+}
+
+func delCommand(client *Client, ctx context.Context, cmd *BoolCmd) *BoolCmd {
+	path := cmd.args[0].(string) + "/" + cmd.args[1].(string)
+	res := makeHttpRequest(client, ctx, http.MethodDelete, path, nil)
+	cmd.cmdStatus = res.cmdStatus
+	if cmd.err != nil {
+		return cmd
+	}
+	if res.contents != nil {
+		cmd.result = true
+	}
 	return cmd
 }
 
@@ -460,7 +503,7 @@ func intIncrCommand(client *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
 
 func intIncrByCommand(client *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
 	path := cmd.args[0].(string) + "/" + cmd.args[1].(string)
-	val := strconv.FormatInt(cmd.args[2].(int64), 10)
+	val := strconv.FormatInt(int64(cmd.args[2].(int)), 10)
 	res := makeHttpRequest(client, ctx, http.MethodPut, path, bytes.NewBufferString(val))
 	cmd.cmdStatus = res.cmdStatus
 	if res.err != nil {
@@ -555,14 +598,6 @@ func mapDelCommand(c *Client, ctx context.Context, cmd *BoolCmd) *BoolCmd {
 	return cmd
 }
 
-func incrCommand(client *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
-	panic("Not implemented!")
-}
-
-func incrByCommand(client *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
-	panic("Not implemented!")
-}
-
 func makeHttpRequest(client *Client, ctx context.Context, httpMethod string, path string, contents *bytes.Buffer) *reqResult {
 	result := &reqResult{}
 	URL := client.baseURL.JoinPath(path)
@@ -582,14 +617,14 @@ func makeHttpRequest(client *Client, ctx context.Context, httpMethod string, pat
 		result.err = err
 		return result
 	}
-	if httpMethod == http.MethodPut {
+	if httpMethod == http.MethodPut && contents != nil {
 		req.Header.Add("Content-Length", fmt.Sprintf("%d", contents.Len()))
 		req.Header.Add("Content-Type", "text/plain")
 	}
 	req.Header.Add("User-Agent", "kvs-client")
-	// Non 2xx status code doesn't cause an error
+	// Non 2xx status code doesn't cause errors
 	resp, err := client.Do(req)
-	if err != nil {
+	if err != nil && err != io.EOF {
 		result.err = err
 		return result
 	}
@@ -602,7 +637,8 @@ func makeHttpRequest(client *Client, ctx context.Context, httpMethod string, pat
 	// In this situation, the body will contain an error message assigned by the server.
 	if (httpMethod == http.MethodGet && resp.StatusCode != http.StatusOK) ||
 		(httpMethod == http.MethodPut && resp.StatusCode != http.StatusCreated) ||
-		(httpMethod == http.MethodDelete && resp.StatusCode != http.StatusNoContent) {
+		(httpMethod == http.MethodDelete && resp.StatusCode != http.StatusNoContent ||
+			(httpMethod == http.MethodHead && resp.StatusCode != http.StatusInternalServerError)) {
 		bytes, _ := io.ReadAll(resp.Body)
 		defer resp.Body.Close()
 		result.err = errors.New(string(bytes))

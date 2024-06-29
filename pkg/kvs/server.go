@@ -18,65 +18,64 @@ import (
 	"github.com/isnastish/kvs/pkg/version"
 )
 
-type Cmd struct {
-	// Value to be added to the storage
-	args []interface{}
-	// Result of Get operation
-	result interface{}
-	// If the value existed before delete operation, set to true
-	deleted bool
-	// If operation returned an error,
-	// such as value doesn't exist from Get command
-	err error
+// TODO: Experiment with middleware
+
+type storageI interface {
+	Add(key string, cmd *CmdResult) *CmdResult
+	Get(key string, cmd *CmdResult) *CmdResult
+	Del(key string, CmdResult *CmdResult) *CmdResult
 }
 
-func newCmd(args ...interface{}) *Cmd {
-	return &Cmd{
+type baseStorage struct {
+	// Moved to a base class in case we need to add some fields in the future
+	*sync.RWMutex
+}
+type IntStorage struct {
+	baseStorage
+	data map[string]int
+}
+
+type UintStorage struct {
+	baseStorage
+	data map[string]uint
+}
+
+type FloatStorage struct {
+	baseStorage
+	data map[string]float32
+}
+
+type StrStorage struct {
+	baseStorage
+	data map[string]string
+}
+
+type MapStorage struct {
+	baseStorage
+	data map[string]map[string]string
+}
+
+type Storage struct {
+	memory map[StorageType]storageI
+}
+
+type CmdResult struct {
+	kind    StorageType
+	args    []interface{}
+	result  interface{}
+	deleted bool
+	err     error
+}
+
+func newCmdResult(args ...interface{}) *CmdResult {
+	return &CmdResult{
 		args: args,
 	}
 }
 
-type baseStorage interface {
-	Add(key string, cmd *Cmd) *Cmd
-	Get(key string, cmd *Cmd) *Cmd
-	Del(key string, cmd *Cmd) *Cmd
-}
-
-type IntStorage struct {
-	data map[string]int
-	sync.RWMutex
-}
-
-type UintStorage struct {
-	data map[string]uint
-	sync.RWMutex
-}
-
-type FloatStorage struct {
-	data map[string]float32
-	sync.RWMutex
-}
-
-type StrStorage struct {
-	data map[string]string
-	sync.RWMutex
-}
-
-type MapStorage struct {
-	data map[string]map[string]string
-	sync.RWMutex
-}
-
-type Storage struct {
-	// In case we add more things here in the future let's keep it as a sturct
-	table map[StorageType]baseStorage
-}
-
-type SetStorage MapStorage
-
 func newStorage() *Storage {
 	return &Storage{
-		table: make(map[StorageType]baseStorage, 5),
+		memory: make(map[StorageType]storageI),
 	}
 }
 
@@ -84,55 +83,61 @@ var globalTransactionLogger *FileTransactionLogger
 var globalStorage *Storage
 
 func initStorage() {
-	// table[uintStorageKind] = newUintStorage()
 	globalStorage = newStorage()
-	globalStorage.table[storageTypeInt] = newIntStorage()
-	globalStorage.table[storageTypeFloat] = newFloatStorage()
-	globalStorage.table[storageTypeString] = newStrStorage()
-	globalStorage.table[storageTypeMap] = newMapStorage()
+	globalStorage.memory[storageInt] = newIntStorage()
+	globalStorage.memory[storageFloat] = newFloatStorage()
+	globalStorage.memory[storageString] = newStrStorage()
+	globalStorage.memory[storageMap] = newMapStorage()
 }
 
 func newMapStorage() *MapStorage {
 	return &MapStorage{
-		data: make(map[string]map[string]string),
+		baseStorage: baseStorage{RWMutex: new(sync.RWMutex)},
+		data:        make(map[string]map[string]string),
 	}
 }
 
 func newIntStorage() *IntStorage {
 	return &IntStorage{
-		data: make(map[string]int),
+		baseStorage: baseStorage{RWMutex: new(sync.RWMutex)},
+		data:        make(map[string]int),
 	}
 }
 
 func newUintStorage() *UintStorage {
 	return &UintStorage{
-		data: make(map[string]uint),
+		baseStorage: baseStorage{RWMutex: new(sync.RWMutex)},
+		data:        make(map[string]uint),
 	}
 }
 
 func newFloatStorage() *FloatStorage {
 	return &FloatStorage{
-		data: make(map[string]float32),
+		baseStorage: baseStorage{RWMutex: new(sync.RWMutex)},
+		data:        make(map[string]float32),
 	}
 }
 
 func newStrStorage() *StrStorage {
 	return &StrStorage{
-		data: make(map[string]string),
+		baseStorage: baseStorage{RWMutex: new(sync.RWMutex)},
+		data:        make(map[string]string),
 	}
 }
 
-func (s *MapStorage) Add(hashKey string, cmd *Cmd) *Cmd {
+func (s *MapStorage) Add(hashKey string, cmd *CmdResult) *CmdResult {
 	s.Lock()
 	s.data[hashKey] = cmd.args[0].(map[string]string)
 	s.Unlock()
+	cmd.kind = storageMap
 	return cmd
 }
 
-func (s *MapStorage) Get(hashKey string, cmd *Cmd) *Cmd {
+func (s *MapStorage) Get(hashKey string, cmd *CmdResult) *CmdResult {
 	s.RLock()
 	val, exists := s.data[hashKey]
 	s.RUnlock()
+	cmd.kind = storageMap
 	if !exists {
 		cmd.err = errors.NotFoundf("Key %s", hashKey)
 		return cmd
@@ -141,28 +146,31 @@ func (s *MapStorage) Get(hashKey string, cmd *Cmd) *Cmd {
 	return cmd
 }
 
-func (s *MapStorage) Del(hashKey string, cmd *Cmd) *Cmd {
+func (s *MapStorage) Del(hashKey string, cmd *CmdResult) *CmdResult {
 	s.Lock()
 	_, exists := s.data[hashKey]
 	delete(s.data, hashKey)
 	s.Unlock()
+	cmd.kind = storageMap
 	// If the value existed before deletion, cmd.deleted is set to true,
 	// false otherwise, so that on the client side we can determine whether the operation modified the storage or not.
 	cmd.deleted = exists
 	return cmd
 }
 
-func (s *StrStorage) Add(hashKey string, cmd *Cmd) *Cmd {
+func (s *StrStorage) Add(hashKey string, cmd *CmdResult) *CmdResult {
 	s.Lock()
 	s.data[hashKey] = cmd.args[0].(string)
 	s.Unlock()
+	cmd.kind = storageString
 	return cmd
 }
 
-func (s *StrStorage) Get(hashKey string, cmd *Cmd) *Cmd {
+func (s *StrStorage) Get(hashKey string, cmd *CmdResult) *CmdResult {
 	s.RLock()
 	val, exists := s.data[hashKey]
 	s.RUnlock()
+	cmd.kind = storageString
 	if !exists {
 		cmd.err = errors.NotFoundf("Key %s", hashKey)
 		return cmd
@@ -171,26 +179,29 @@ func (s *StrStorage) Get(hashKey string, cmd *Cmd) *Cmd {
 	return cmd
 }
 
-func (s *StrStorage) Del(hashKey string, cmd *Cmd) *Cmd {
+func (s *StrStorage) Del(hashKey string, cmd *CmdResult) *CmdResult {
 	s.Lock()
 	_, exists := s.data[hashKey]
 	delete(s.data, hashKey)
 	s.Unlock()
+	cmd.kind = storageString
 	cmd.deleted = exists
 	return cmd
 }
 
-func (s *IntStorage) Add(hashKey string, cmd *Cmd) *Cmd {
+func (s *IntStorage) Add(hashKey string, cmd *CmdResult) *CmdResult {
 	s.Lock()
 	s.data[hashKey] = cmd.args[0].(int)
 	s.Unlock()
+	cmd.kind = storageInt
 	return cmd
 }
 
-func (s *IntStorage) Get(hashKey string, cmd *Cmd) *Cmd {
+func (s *IntStorage) Get(hashKey string, cmd *CmdResult) *CmdResult {
 	s.RLock()
 	val, exists := s.data[hashKey]
 	s.RUnlock()
+	cmd.kind = storageInt
 	if !exists {
 		cmd.err = errors.NotFoundf("Key %s", hashKey)
 		return cmd
@@ -199,22 +210,26 @@ func (s *IntStorage) Get(hashKey string, cmd *Cmd) *Cmd {
 	return cmd
 }
 
-func (s *IntStorage) Del(hashKey string, cmd *Cmd) *Cmd {
+func (s *IntStorage) Del(hashKey string, cmd *CmdResult) *CmdResult {
 	s.Lock()
 	_, exists := s.data[hashKey]
 	delete(s.data, hashKey)
 	s.Unlock()
+	cmd.kind = storageInt
 	cmd.deleted = exists
 	return cmd
 }
 
-// The response should contain the previous value
-func (s *IntStorage) Incr(hashKey string, cmd *Cmd) *Cmd {
+func (s *IntStorage) Incr(hashKey string, cmd *CmdResult) *CmdResult {
 	s.Lock()
 	defer s.Unlock()
+	cmd.kind = storageInt
 	val, exists := s.data[hashKey]
+	// If the value doesn't exist, we should created a new entry with the specified key,
+	// and set the value to zero
 	if !exists {
-		cmd.err = errors.NotFoundf("Key %s", hashKey)
+		s.data[hashKey] = 1
+		cmd.result = 0
 		return cmd
 	}
 	cmd.result = val
@@ -222,12 +237,17 @@ func (s *IntStorage) Incr(hashKey string, cmd *Cmd) *Cmd {
 	return cmd
 }
 
-func (s *IntStorage) IncrBy(hashKey string, cmd *Cmd) *Cmd {
+func (s *IntStorage) IncrBy(hashKey string, cmd *CmdResult) *CmdResult {
 	s.Lock()
 	defer s.Unlock()
+	cmd.kind = storageInt
 	val, exists := s.data[hashKey]
+	// The same applies to IncrBy, if the hashKey doesn't exist,
+	// we should create a new one and set the value to cmd.val,
+	// but return the result as zero
 	if !exists {
-		cmd.err = errors.NotFoundf("Key %s", hashKey)
+		s.data[hashKey] = cmd.args[0].(int)
+		cmd.result = 0
 		return cmd
 	}
 	cmd.result = val
@@ -235,19 +255,21 @@ func (s *IntStorage) IncrBy(hashKey string, cmd *Cmd) *Cmd {
 	return cmd
 }
 
-func (s *FloatStorage) Add(hashKey string, cmd *Cmd) *Cmd {
+func (s *FloatStorage) Add(hashKey string, cmd *CmdResult) *CmdResult {
 	s.Lock()
 	// Consider the precision in the future. Maybe we have to suply the precision
 	// together with the value itself
 	s.data[hashKey] = float32(cmd.args[0].(float64))
 	s.Unlock()
+	cmd.kind = storageFloat
 	return cmd
 }
 
-func (s *FloatStorage) Get(hashKey string, cmd *Cmd) *Cmd {
+func (s *FloatStorage) Get(hashKey string, cmd *CmdResult) *CmdResult {
 	s.Lock()
 	val, exists := s.data[hashKey]
 	s.Unlock()
+	cmd.kind = storageFloat
 	if !exists {
 		cmd.err = errors.NotFoundf("Key %s", hashKey)
 		return cmd
@@ -256,11 +278,12 @@ func (s *FloatStorage) Get(hashKey string, cmd *Cmd) *Cmd {
 	return cmd
 }
 
-func (s *FloatStorage) Del(hashKey string, cmd *Cmd) *Cmd {
+func (s *FloatStorage) Del(hashKey string, cmd *CmdResult) *CmdResult {
 	s.Lock()
 	_, exists := s.data[hashKey]
 	delete(s.data, hashKey)
 	s.Unlock()
+	cmd.kind = storageFloat
 	cmd.deleted = exists
 	return cmd
 }
@@ -275,50 +298,51 @@ func stringAddHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	cmd := globalStorage.table[storageTypeString].Add(key, newCmd(string(val)))
+	cmd := globalStorage.memory[storageString].Add(key, newCmdResult(string(val)))
 	if cmd.err != nil {
 		http.Error(w, cmd.err.Error(), http.StatusInternalServerError)
 		return
 	}
-	w.WriteHeader(http.StatusCreated)
+	globalTransactionLogger.writeEvent(eventAdd, storageString, key, string(val))
 
-	globalTransactionLogger.writeEvent(eventTypeAdd, storageTypeString, key, string(val))
+	w.WriteHeader(http.StatusCreated)
 }
 
 func stringGetHandler(w http.ResponseWriter, r *http.Request) {
 	log.Logger.Info("Endpoint %s, method %s", r.RequestURI, r.Method)
 
 	key := mux.Vars(r)["key"]
-	cmd := globalStorage.table[storageTypeString].Get(key, newCmd())
+	cmd := globalStorage.memory[storageString].Get(key, newCmdResult())
 	if cmd.err != nil {
 		http.Error(w, cmd.err.Error(), http.StatusNotFound)
 		return
 	}
+	globalTransactionLogger.writeEvent(eventGet, storageString, key)
+
 	bytes := []byte(cmd.result.(string))
 	w.Header().Add("Content-Type", "text/plain")
 	w.Header().Add("Content-Length", strconv.Itoa(len(bytes)))
 
 	w.WriteHeader(http.StatusOK)
 	w.Write(bytes)
-
-	globalTransactionLogger.writeEvent(eventTypeGet, storageTypeString, key)
 }
 
 func stringDeleteHandler(w http.ResponseWriter, r *http.Request) {
 	log.Logger.Info("Endpoint %s, method %s", r.RequestURI, r.Method)
 
 	key := mux.Vars(r)["key"]
-	cmd := globalStorage.table[storageTypeString].Del(key, newCmd())
+	cmd := globalStorage.memory[storageString].Del(key, newCmdResult())
 	if cmd.err != nil {
 		http.Error(w, cmd.err.Error(), http.StatusInternalServerError)
 		return
 	}
+	globalTransactionLogger.writeEvent(eventDel, storageString, key)
+
 	if cmd.deleted {
 		w.Header().Add("Deleted", "1")
 	}
-	w.WriteHeader(http.StatusNoContent)
 
-	globalTransactionLogger.writeEvent(eventTypeDel, storageTypeString, key)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func mapAddHandler(w http.ResponseWriter, r *http.Request) {
@@ -337,27 +361,26 @@ func mapAddHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	cmd := globalStorage.table[storageTypeMap].Add(key, newCmd(hashMap))
+	cmd := globalStorage.memory[storageMap].Add(key, newCmdResult(hashMap))
 	if cmd.err != nil {
 		http.Error(w, cmd.err.Error(), http.StatusInternalServerError)
 		return
 	}
-	w.WriteHeader(http.StatusCreated)
+	globalTransactionLogger.writeEvent(eventAdd, storageMap, key, hashMap)
 
-	globalTransactionLogger.writeEvent(eventTypeAdd, storageTypeMap, key, hashMap)
+	w.WriteHeader(http.StatusCreated)
 }
 
 func mapGetHandler(w http.ResponseWriter, r *http.Request) {
 	log.Logger.Info("Endpoint %s, method %s", r.RequestURI, r.Method)
 
 	key := mux.Vars(r)["key"]
-	cmd := globalStorage.table[storageTypeMap].Get(key, newCmd())
+	cmd := globalStorage.memory[storageMap].Get(key, newCmdResult())
 	if cmd.err != nil {
 		http.Error(w, cmd.err.Error(), http.StatusNotFound)
 		return
 	}
-
-	defer globalTransactionLogger.writeEvent(eventTypeGet, storageTypeMap, key)
+	globalTransactionLogger.writeEvent(eventGet, storageMap, key)
 
 	bytes, err := json.Marshal(cmd.result)
 	if err != nil {
@@ -375,17 +398,17 @@ func mapDeleteHandler(w http.ResponseWriter, r *http.Request) {
 	log.Logger.Info("Endpoint %s, method %s", r.RequestURI, r.Method)
 
 	key := mux.Vars(r)["key"]
-	cmd := globalStorage.table[storageTypeMap].Del(key, newCmd())
+	cmd := globalStorage.memory[storageMap].Del(key, newCmdResult())
 	if cmd.err != nil {
 		http.Error(w, cmd.err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// Writing an event even if the value didn't exist
+	globalTransactionLogger.writeEvent(eventDel, storageMap, key)
 	if cmd.deleted {
 		w.Header().Add("Deleted", "1")
 	}
 	w.WriteHeader(http.StatusNoContent)
-
-	globalTransactionLogger.writeEvent(eventTypeDel, storageTypeMap, key)
 }
 
 func intAddHandler(w http.ResponseWriter, r *http.Request) {
@@ -403,67 +426,67 @@ func intAddHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	cmd := globalStorage.table[storageTypeInt].Add(key, newCmd(val))
+	cmd := globalStorage.memory[storageInt].Add(key, newCmdResult(val))
 	if cmd.err != nil {
 		http.Error(w, cmd.err.Error(), http.StatusInternalServerError)
 		return
 	}
+	globalTransactionLogger.writeEvent(eventAdd, storageInt, key, val)
 	w.WriteHeader(http.StatusCreated)
-
-	globalTransactionLogger.writeEvent(eventTypeAdd, storageTypeInt, key, val)
 }
 
 func intGetHandler(w http.ResponseWriter, r *http.Request) {
 	log.Logger.Info("Endpoint %s, method %s", r.RequestURI, r.Method)
 
 	key := mux.Vars(r)["key"]
-	cmd := globalStorage.table[storageTypeInt].Get(key, newCmd())
+	cmd := globalStorage.memory[storageInt].Get(key, newCmdResult())
 	if cmd.err != nil {
 		http.Error(w, cmd.err.Error(), http.StatusNotFound)
 		return
 	}
+	globalTransactionLogger.writeEvent(eventGet, storageInt, key)
+
 	w.Header().Add("Conent-Type", "text/plain")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(fmt.Sprintf("%d", cmd.result)))
-
-	globalTransactionLogger.writeEvent(eventTypeGet, storageTypeInt, key)
 }
 
 func intDeleteHandler(w http.ResponseWriter, r *http.Request) {
 	log.Logger.Info("Endpoint %s, method %s", r.RequestURI, r.Method)
 
 	key := mux.Vars(r)["key"]
-	cmd := globalStorage.table[storageTypeInt].Del(key, newCmd())
+	cmd := globalStorage.memory[storageInt].Del(key, newCmdResult())
 	if cmd.err != nil {
 		http.Error(w, cmd.err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// Write an event even if the value wasn't deleted?
+	globalTransactionLogger.writeEvent(eventDel, storageInt, key)
+
 	if cmd.deleted {
 		w.Header().Add("Deleted", "1")
 	}
 	w.WriteHeader(http.StatusNoContent)
-
-	globalTransactionLogger.writeEvent(eventTypeDel, storageTypeInt, key)
 }
 
 func intIncrHandler(w http.ResponseWriter, r *http.Request) {
 	log.Logger.Info("Endpoint %s, method %s", r.RequestURI, r.Method)
 
 	key := mux.Vars(r)["key"]
-	intStorage := globalStorage.table[storageTypeInt].(*IntStorage)
-	cmd := intStorage.Incr(key, newCmd())
-	if cmd != nil {
+	intStorage := globalStorage.memory[storageInt].(*IntStorage)
+	cmd := intStorage.Incr(key, newCmdResult())
+	if cmd.err != nil {
 		http.Error(w, cmd.err.Error(), http.StatusInternalServerError)
 		return
 	}
+	globalTransactionLogger.writeEvent(eventIncr, storageInt, key)
+
 	// response body should contain the preivous value
-	contents := strconv.FormatInt(cmd.result.(int64), 10)
+	contents := strconv.FormatInt(int64(cmd.result.(int)), 10)
 	w.Header().Add("Content-Type", "application/octet-stream")
 	w.Header().Add("Content-Length", fmt.Sprintf("%d", len(contents)))
 	w.WriteHeader(http.StatusCreated)
 	w.Write([]byte(contents))
-
-	globalTransactionLogger.writeEvent(eventTypeIncr, storageTypeInt, key)
 }
 
 func intIncrByHandler(w http.ResponseWriter, r *http.Request) {
@@ -481,36 +504,41 @@ func intIncrByHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	intStorage := globalStorage.table[storageTypeInt].(*IntStorage)
-	cmd := intStorage.IncrBy(key, newCmd(val))
+	intStorage := globalStorage.memory[storageInt].(*IntStorage)
+	cmd := intStorage.IncrBy(key, newCmdResult(int(val)))
 	if cmd.err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	globalTransactionLogger.writeEvent(eventIncrBy, storageInt, key, val)
+
 	// response should contain the previously inserted value
-	contents := strconv.FormatInt(cmd.result.(int64), 10)
+	contents := strconv.FormatInt(int64(cmd.result.(int)), 10)
 	w.Header().Add("Content-Type", "application/octet-stream")
 	w.Header().Add("Content-Length", fmt.Sprintf("%d", len(contents)))
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(contents))
 
-	globalTransactionLogger.writeEvent(eventTypeIncrBy, storageTypeInt, key, val)
+	// TODO: Only return http.StatusCreated when the key didn't exist before
+	// In all the other cases, http.StatusOk should be returned.
+	// The corresponding changes should be done on the client side as well,
+	// inside makeHttpRequest procedure.
+	w.WriteHeader(http.StatusCreated)
+	w.Write([]byte(contents))
 }
 
 func floatGetHandler(w http.ResponseWriter, r *http.Request) {
 	log.Logger.Info("Endpoint %s, method %s", r.RequestURI, r.Method)
 
 	key := mux.Vars(r)["key"]
-	cmd := globalStorage.table[storageTypeFloat].Get(key, newCmd())
+	cmd := globalStorage.memory[storageFloat].Get(key, newCmdResult())
 	if cmd.err != nil {
 		http.Error(w, cmd.err.Error(), http.StatusNotFound)
 		return
 	}
+	globalTransactionLogger.writeEvent(eventGet, storageFloat, key)
+
 	w.Header().Add("Conent-Type", "text/plain")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(fmt.Sprintf("%e", cmd.result)))
-
-	globalTransactionLogger.writeEvent(eventTypeGet, storageTypeFloat, key)
 }
 
 func floatAddHandler(w http.ResponseWriter, r *http.Request) {
@@ -528,21 +556,21 @@ func floatAddHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	cmd := globalStorage.table[storageTypeFloat].Add(key, newCmd(val))
+	cmd := globalStorage.memory[storageFloat].Add(key, newCmdResult(val))
 	if cmd.err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	w.WriteHeader(http.StatusCreated)
+	globalTransactionLogger.writeEvent(eventAdd, storageFloat, key, val)
 
-	globalTransactionLogger.writeEvent(eventTypeAdd, storageTypeFloat, key, val)
+	w.WriteHeader(http.StatusCreated)
 }
 
 func floatDeleteHandler(w http.ResponseWriter, r *http.Request) {
 	log.Logger.Info("Endpoint %s, method %s", r.RequestURI, r.Method)
 
 	key := mux.Vars(r)["key"]
-	cmd := globalStorage.table[storageTypeFloat].Del(key, newCmd())
+	cmd := globalStorage.memory[storageFloat].Del(key, newCmdResult())
 	if cmd.err != nil {
 		http.Error(w, cmd.err.Error(), http.StatusInternalServerError)
 		return
@@ -550,18 +578,40 @@ func floatDeleteHandler(w http.ResponseWriter, r *http.Request) {
 	if cmd.deleted {
 		w.Header().Add("Deleted", "1")
 	}
-	w.WriteHeader(http.StatusNoContent)
+	globalTransactionLogger.writeEvent(eventDel, storageFloat, key)
 
-	globalTransactionLogger.writeEvent(eventTypeDel, storageTypeFloat, key)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func uintAddHandler(w http.ResponseWriter, r *http.Request) {
+	log.Logger.Info("Uint32 PUT endpoint is not implemented yet")
+}
+
+func uintGetHandler(w http.ResponseWriter, r *http.Request) {
+	log.Logger.Info("Uint32 GET endpoint is not implemented yet")
+}
+
+func uintDelHandler(w http.ResponseWriter, r *http.Request) {
+	log.Logger.Info("Uint32 DELETE endpoint is not implemented yet")
+}
+
+func delKeyHandler(w http.ResponseWriter, r *http.Request) {
+	log.Logger.Info("Endpoint %s, method %s", r.RequestURI, r.Method)
+
+	key := mux.Vars(r)["key"]
+	for _, storage := range globalStorage.memory {
+		cmd := storage.Del(key, newCmdResult())
+		if cmd.deleted {
+			w.Header().Add("Deleter", "1")
+			globalTransactionLogger.writeEvent(eventDel, cmd.kind, key)
+			break
+		}
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func echoHandler(w http.ResponseWriter, r *http.Request) {
 	log.Logger.Info("Endpoint %s, method %s", r.RequestURI, r.Method)
-
-	// TODO: Experiment with request cancelations
-	// select {
-	// case <-r.Context().Done():
-	// }
 
 	buf, err := io.ReadAll(r.Body)
 	defer r.Body.Close()
@@ -600,8 +650,9 @@ func helloHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(helloStr))
 }
 
-func initTransactionLogger(ctx context.Context, transactionLoggerFileName string) error {
+func initTransactionLogger(ctx context.Context, waitGroup *sync.WaitGroup, transactionLoggerFileName string) error {
 	var err error
+	var event Event
 
 	globalTransactionLogger, err = newFileTransactionsLogger(transactionLoggerFileName)
 	if err != nil {
@@ -610,47 +661,62 @@ func initTransactionLogger(ctx context.Context, transactionLoggerFileName string
 
 	events, errors := globalTransactionLogger.readEvents()
 
-Running:
 	for {
 		select {
-		case event := <-events:
+		case event = <-events:
 			switch event.Type {
-			case eventTypeAdd:
-				cmd := globalStorage.table[event.StorageType].Add(event.Key, newCmd(event.Val))
+			case eventAdd:
+				cmd := globalStorage.memory[event.StorageType].Add(event.Key, newCmdResult(event.Val))
 				err = cmd.err
 
-			case eventTypeGet:
+			case eventGet:
 				// Get events don't modify the storage anyhow,
 				// so probably we don't need to store them anywhere
-				cmd := globalStorage.table[event.StorageType].Get(event.Key, newCmd())
+				cmd := globalStorage.memory[event.StorageType].Get(event.Key, newCmdResult())
 				err = cmd.err
 
-			case eventTypeDel:
-				cmd := globalStorage.table[event.StorageType].Del(event.Key, newCmd())
+			case eventDel:
+				cmd := globalStorage.memory[event.StorageType].Del(event.Key, newCmdResult())
 				err = cmd.err
 
-			case eventTypeIncr:
-				intStorage := globalStorage.table[event.StorageType].(*IntStorage)
-				cmd := intStorage.IncrBy(event.Key, newCmd())
+			case eventIncr:
+				intStorage := globalStorage.memory[event.StorageType].(*IntStorage)
+				cmd := intStorage.IncrBy(event.Key, newCmdResult())
 				err = cmd.err
 
-			case eventTypeIncrBy:
-				intStorage := globalStorage.table[event.StorageType].(*IntStorage)
-				cmd := intStorage.Incr(event.Key, newCmd(event.Val))
+			case eventIncrBy:
+				intStorage := globalStorage.memory[event.StorageType].(*IntStorage)
+				cmd := intStorage.Incr(event.Key, newCmdResult(event.Val))
 				err = cmd.err
 			}
 
 		case err = <-errors:
-			break Running
+			if err != io.EOF {
+				return err
+			}
+			// In case the server terminates, we want to make sure,
+			// that we have written all the pending events to the transaction log file.
+			waitGroup.Add(1)
+			go func() {
+				defer waitGroup.Done()
+				globalTransactionLogger.writeEvents(ctx)
+			}()
+			return nil
 		}
-	}
 
-	if err != nil && err != io.EOF {
-		return err
-	}
+		if err != nil {
+			return err
+		}
 
-	go globalTransactionLogger.writeEvents(ctx)
-	return nil
+		log.Logger.Info("Read %s, id %d, key %s, storage %s",
+			event.Type.toStr(),
+			event.Id,
+			event.Key,
+			event.StorageType.toStr(),
+		)
+
+		event = Event{}
+	}
 }
 
 type Settings struct {
@@ -662,22 +728,26 @@ type Settings struct {
 	TransactionLogFile string
 }
 
-func RunServer(settings *Settings) {
-	// Replay events from the transactions logger file if the server crashed.
-	// We should read all the events first before getting to processing all transactions
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+type Server struct {
+	*http.Server
+	ctx       context.Context
+	cancel    context.CancelFunc
+	wg        sync.WaitGroup
+	txnLogger TransactionLogger
+}
 
+func RunServer(settings *Settings) {
 	initStorage()
 
-	if err := initTransactionLogger(ctx, settings.TransactionLogFile); err != nil {
+	// Replay events from the transactions logger file if the server crashed.
+	// We should read all the events first before getting to processing all transactions
+	serverShutdownCtx, serverCancelFunc := context.WithCancel(context.Background())
+	waitGroup := sync.WaitGroup{}
+	if err := initTransactionLogger(serverShutdownCtx, &waitGroup, settings.TransactionLogFile); err != nil {
 		log.Logger.Panic("Failed to initialize the transaction logger %v", err)
 	}
 
-	router := mux.NewRouter()
-	// /path/ and /path will trigger the same endpoint
-	// router = router.StrictSlash(true)
-
+	router := mux.NewRouter().StrictSlash(true)
 	subrouter := router.PathPrefix(fmt.Sprintf("/api/%s/", version.GetServiceVersion())).Subrouter()
 
 	// NOTE: The echo endpoint should be bound to GET method and contain a body,
@@ -705,30 +775,50 @@ func RunServer(settings *Settings) {
 	subrouter.Path("/floatget/{key:[0-9A-Za-z_]+}").HandlerFunc(floatGetHandler).Methods("GET")
 	subrouter.Path("/floatdel/{key:[0-9A-Za-z_]+}").HandlerFunc(floatDeleteHandler).Methods("DELETE")
 
+	subrouter.Path("/uintadd/{key:[0-9A-Za-z_]+}").HandlerFunc(uintAddHandler).Methods("PUT")
+	subrouter.Path("/uintadd/{key:[0-9A-Za-z_]+}").HandlerFunc(uintGetHandler).Methods("GET")
+	subrouter.Path("/uintadd/{key:[0-9A-Za-z_]+}").HandlerFunc(uintDelHandler).Methods("DELETE")
+
+	// Endpoint to delete a key from any type of storage
+	subrouter.Path("/del/{key:[0-9A-Za-z_]+}").HandlerFunc(delKeyHandler).Methods("DELETE")
+
 	// https://stackoverflow.com/questions/39320025/how-to-stop-http-listenandserve
 	httpServer := http.Server{
 		Addr:    settings.Endpoint,
 		Handler: router,
 	}
 
-	serverWaitGroup := sync.WaitGroup{}
-	serverWaitGroup.Add(1)
+	// kill the server endpoint
+	subrouter.Path("/kill").HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		log.Logger.Info("Killing the server")
+
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5000*time.Millisecond)
+		defer cancel()
+		if err := httpServer.Shutdown(shutdownCtx); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			log.Logger.Error("Server shutdown failed")
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+
+	waitGroup.Add(1)
 	go func() {
-		defer serverWaitGroup.Done()
+		defer serverCancelFunc()
+		defer waitGroup.Done()
 		log.Logger.Info("Listening %s", settings.Endpoint)
 		if err := httpServer.ListenAndServe(); err != http.ErrServerClosed {
-			log.Logger.Panic("Server error %v", err)
+			log.Logger.Panic("Server terminated abnormally %v", err)
 			return
 		}
 	}()
+	defer waitGroup.Wait()
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10000*time.Millisecond)
-	defer cancel()
-	if err := httpServer.Shutdown(shutdownCtx); err != nil {
-		log.Logger.Panic("Server shutdown failed")
-	}
-
-	serverWaitGroup.Wait()
-
-	log.Logger.Info("Server was closed gracefully")
+	// <-time.After(5000 * time.Millisecond)
+	// shutdownCtx, cancel := context.WithTimeout(context.Background(), 5000*time.Millisecond)
+	// defer cancel()
+	// if err := httpServer.Shutdown(shutdownCtx); err != nil {
+	// 	log.Logger.Error("Server shutdown failed %v", err)
+	// 	return
+	// }
 }
