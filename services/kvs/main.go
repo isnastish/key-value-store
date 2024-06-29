@@ -12,6 +12,7 @@ func main() {
 	flag.StringVar(&settings.Endpoint, "endpoint", ":8080", "Address to run a key-value storage on")
 	flag.StringVar(&settings.CertPemFile, "certpem", "cert.pem", "File containing server certificate")
 	flag.StringVar(&settings.KeyPemFile, "keypem", "key.pem", "File containing client certificate")
+	flag.StringVar(&settings.TransactionLogFile, "transactionFile", "../../transactions.bin", "Path to transaction log file")
 	logLevel := flag.String("loglevel", "DEBUG", "Set log level. Feasible values (DEBUG|INFO|WARN|ERROR|FATAL|PANIC|DISABLED)")
 	flag.Parse()
 
