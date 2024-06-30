@@ -387,6 +387,7 @@ func mapGetHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+
 	w.Header().Add("Content-Type", "application/octet-stream")
 	w.Header().Add("Content-Length", fmt.Sprintf("%d", len(bytes)))
 
@@ -403,11 +404,12 @@ func mapDeleteHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, cmd.err.Error(), http.StatusInternalServerError)
 		return
 	}
-	// Writing an event even if the value didn't exist
 	globalTransactionLogger.writeEvent(eventDel, storageMap, key)
+
 	if cmd.deleted {
 		w.Header().Add("Deleted", "1")
 	}
+
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -447,6 +449,7 @@ func intGetHandler(w http.ResponseWriter, r *http.Request) {
 	globalTransactionLogger.writeEvent(eventGet, storageInt, key)
 
 	w.Header().Add("Conent-Type", "text/plain")
+
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(fmt.Sprintf("%d", cmd.result)))
 }
@@ -460,12 +463,12 @@ func intDeleteHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, cmd.err.Error(), http.StatusInternalServerError)
 		return
 	}
-	// Write an event even if the value wasn't deleted?
 	globalTransactionLogger.writeEvent(eventDel, storageInt, key)
 
 	if cmd.deleted {
 		w.Header().Add("Deleted", "1")
 	}
+
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -516,11 +519,6 @@ func intIncrByHandler(w http.ResponseWriter, r *http.Request) {
 	contents := strconv.FormatInt(int64(cmd.result.(int)), 10)
 	w.Header().Add("Content-Type", "application/octet-stream")
 	w.Header().Add("Content-Length", fmt.Sprintf("%d", len(contents)))
-
-	// TODO: Only return http.StatusCreated when the key didn't exist before
-	// In all the other cases, http.StatusOk should be returned.
-	// The corresponding changes should be done on the client side as well,
-	// inside makeHttpRequest procedure.
 	w.WriteHeader(http.StatusCreated)
 	w.Write([]byte(contents))
 }
@@ -536,7 +534,6 @@ func floatGetHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	globalTransactionLogger.writeEvent(eventGet, storageFloat, key)
 
-	w.Header().Add("Conent-Type", "text/plain")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(fmt.Sprintf("%e", cmd.result)))
 }
@@ -720,11 +717,13 @@ func initTransactionLogger(ctx context.Context, waitGroup *sync.WaitGroup, trans
 }
 
 type Settings struct {
-	Endpoint           string
-	CertPemFile        string
-	KeyPemFile         string
-	Username           string
-	Password           string
+	Endpoint    string
+	CertPemFile string
+	KeyPemFile  string
+	Username    string
+	Password    string
+	// specify transaction logger type
+	// either a database, or a transaction log file
 	TransactionLogFile string
 }
 
@@ -788,15 +787,15 @@ func RunServer(settings *Settings) {
 		Handler: router,
 	}
 
-	// kill the server endpoint
+	// kill the server endpoint. Any method would work
 	subrouter.Path("/kill").HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		log.Logger.Info("Killing the server")
 
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5000*time.Millisecond)
 		defer cancel()
-		if err := httpServer.Shutdown(shutdownCtx); err != nil {
+		if err := httpServer.Shutdown(shutdownCtx); err != nil && err != context.DeadlineExceeded {
+			log.Logger.Error("Server shutdown failed %v", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
-			log.Logger.Error("Server shutdown failed")
 			return
 		}
 		w.WriteHeader(http.StatusOK)
@@ -812,13 +811,7 @@ func RunServer(settings *Settings) {
 			return
 		}
 	}()
-	defer waitGroup.Wait()
+	waitGroup.Wait()
 
-	// <-time.After(5000 * time.Millisecond)
-	// shutdownCtx, cancel := context.WithTimeout(context.Background(), 5000*time.Millisecond)
-	// defer cancel()
-	// if err := httpServer.Shutdown(shutdownCtx); err != nil {
-	// 	log.Logger.Error("Server shutdown failed %v", err)
-	// 	return
-	// }
+	log.Logger.Info("Server was closed gracefully")
 }

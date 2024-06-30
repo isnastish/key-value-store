@@ -6,6 +6,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	_ "go.uber.org/goleak"
+
+	_ "github.com/gorilla/mux"
 )
 
 var settings = &Settings{
@@ -16,15 +18,15 @@ var settings = &Settings{
 func zero(v interface{}) {
 	switch v.(type) {
 	case *IntCmd:
-		(*v.(*IntCmd)) = IntCmd{}
+		*(v.(*IntCmd)) = IntCmd{}
 	case *BoolCmd:
-		(*v.(*BoolCmd)) = BoolCmd{}
+		*(v.(*BoolCmd)) = BoolCmd{}
 	case *StrCmd:
-		(*v.(*StrCmd)) = StrCmd{}
+		*(v.(*StrCmd)) = StrCmd{}
 	case *FloatCmd:
-		(*v.(*FloatCmd)) = FloatCmd{}
+		*(v.(*FloatCmd)) = FloatCmd{}
 	case *MapCmd:
-		(*v.(*MapCmd)) = MapCmd{}
+		*(v.(*MapCmd)) = MapCmd{}
 	default:
 		panic("Invalid type")
 	}
@@ -168,11 +170,3 @@ func Test_IntIncBy(t *testing.T) {
 	delRes := client.Del(ctx, key)
 	assert.True(t, delRes.Result())
 }
-
-// func Test_KillServer(t *testing.T) {
-// 	client := NewClient(settings)
-// 	ctx, cancel := context.WithCancel(context.Background())
-// 	defer cancel()
-// 	killRes := client.Kill(ctx)
-// 	assert.Equal(t, 200, killRes.StatusCode())
-// }
