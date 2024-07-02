@@ -18,7 +18,9 @@ import (
 	"github.com/isnastish/kvs/pkg/version"
 )
 
-// TODO: Experiment with middleware
+// TODO: Implement a throttle pattern on the server side.
+// We should limit the amount of requests a client can make to a service
+// to 10 request per second.
 
 type storageI interface {
 	Add(key string, cmd *CmdResult) *CmdResult
@@ -288,12 +290,12 @@ func (s *FloatStorage) Del(hashKey string, cmd *CmdResult) *CmdResult {
 	return cmd
 }
 
-func stringAddHandler(w http.ResponseWriter, r *http.Request) {
-	log.Logger.Info("Endpoint %s, method %s", r.RequestURI, r.Method)
+func stringAddHandler(w http.ResponseWriter, req *http.Request) {
+	logOnEndpointHit(req.RequestURI, req.Method, req.RemoteAddr)
 
-	key := mux.Vars(r)["key"]
-	val, err := io.ReadAll(r.Body)
-	defer r.Body.Close()
+	key := mux.Vars(req)["key"]
+	val, err := io.ReadAll(req.Body)
+	defer req.Body.Close()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -308,10 +310,10 @@ func stringAddHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusCreated)
 }
 
-func stringGetHandler(w http.ResponseWriter, r *http.Request) {
-	log.Logger.Info("Endpoint %s, method %s", r.RequestURI, r.Method)
+func stringGetHandler(w http.ResponseWriter, req *http.Request) {
+	logOnEndpointHit(req.RequestURI, req.Method, req.RemoteAddr)
 
-	key := mux.Vars(r)["key"]
+	key := mux.Vars(req)["key"]
 	cmd := globalStorage.memory[storageString].Get(key, newCmdResult())
 	if cmd.err != nil {
 		http.Error(w, cmd.err.Error(), http.StatusNotFound)
@@ -327,10 +329,10 @@ func stringGetHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write(bytes)
 }
 
-func stringDeleteHandler(w http.ResponseWriter, r *http.Request) {
-	log.Logger.Info("Endpoint %s, method %s", r.RequestURI, r.Method)
+func stringDeleteHandler(w http.ResponseWriter, req *http.Request) {
+	logOnEndpointHit(req.RequestURI, req.Method, req.RemoteAddr)
 
-	key := mux.Vars(r)["key"]
+	key := mux.Vars(req)["key"]
 	cmd := globalStorage.memory[storageString].Del(key, newCmdResult())
 	if cmd.err != nil {
 		http.Error(w, cmd.err.Error(), http.StatusInternalServerError)
@@ -345,12 +347,12 @@ func stringDeleteHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func mapAddHandler(w http.ResponseWriter, r *http.Request) {
-	log.Logger.Info("Endpoint %s, method %s", r.RequestURI, r.Method)
+func mapAddHandler(w http.ResponseWriter, req *http.Request) {
+	logOnEndpointHit(req.RequestURI, req.Method, req.RemoteAddr)
 
-	key := mux.Vars(r)["key"]
-	body, err := io.ReadAll(r.Body)
-	defer r.Body.Close()
+	key := mux.Vars(req)["key"]
+	body, err := io.ReadAll(req.Body)
+	defer req.Body.Close()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -371,10 +373,10 @@ func mapAddHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusCreated)
 }
 
-func mapGetHandler(w http.ResponseWriter, r *http.Request) {
-	log.Logger.Info("Endpoint %s, method %s", r.RequestURI, r.Method)
+func mapGetHandler(w http.ResponseWriter, req *http.Request) {
+	logOnEndpointHit(req.RequestURI, req.Method, req.RemoteAddr)
 
-	key := mux.Vars(r)["key"]
+	key := mux.Vars(req)["key"]
 	cmd := globalStorage.memory[storageMap].Get(key, newCmdResult())
 	if cmd.err != nil {
 		http.Error(w, cmd.err.Error(), http.StatusNotFound)
@@ -395,10 +397,10 @@ func mapGetHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write(bytes)
 }
 
-func mapDeleteHandler(w http.ResponseWriter, r *http.Request) {
-	log.Logger.Info("Endpoint %s, method %s", r.RequestURI, r.Method)
+func mapDeleteHandler(w http.ResponseWriter, req *http.Request) {
+	logOnEndpointHit(req.RequestURI, req.Method, req.RemoteAddr)
 
-	key := mux.Vars(r)["key"]
+	key := mux.Vars(req)["key"]
 	cmd := globalStorage.memory[storageMap].Del(key, newCmdResult())
 	if cmd.err != nil {
 		http.Error(w, cmd.err.Error(), http.StatusInternalServerError)
@@ -409,16 +411,15 @@ func mapDeleteHandler(w http.ResponseWriter, r *http.Request) {
 	if cmd.deleted {
 		w.Header().Add("Deleted", "1")
 	}
-
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func intAddHandler(w http.ResponseWriter, r *http.Request) {
-	log.Logger.Info("Endpoint %s, method %s", r.RequestURI, r.Method)
+func intAddHandler(w http.ResponseWriter, req *http.Request) {
+	logOnEndpointHit(req.RequestURI, req.Method, req.RemoteAddr)
 
-	key := mux.Vars(r)["key"]
-	body, err := io.ReadAll(r.Body)
-	defer r.Body.Close()
+	key := mux.Vars(req)["key"]
+	body, err := io.ReadAll(req.Body)
+	defer req.Body.Close()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -437,10 +438,10 @@ func intAddHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusCreated)
 }
 
-func intGetHandler(w http.ResponseWriter, r *http.Request) {
-	log.Logger.Info("Endpoint %s, method %s", r.RequestURI, r.Method)
+func intGetHandler(w http.ResponseWriter, req *http.Request) {
+	logOnEndpointHit(req.RequestURI, req.Method, req.RemoteAddr)
 
-	key := mux.Vars(r)["key"]
+	key := mux.Vars(req)["key"]
 	cmd := globalStorage.memory[storageInt].Get(key, newCmdResult())
 	if cmd.err != nil {
 		http.Error(w, cmd.err.Error(), http.StatusNotFound)
@@ -454,10 +455,10 @@ func intGetHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(fmt.Sprintf("%d", cmd.result)))
 }
 
-func intDeleteHandler(w http.ResponseWriter, r *http.Request) {
-	log.Logger.Info("Endpoint %s, method %s", r.RequestURI, r.Method)
+func intDeleteHandler(w http.ResponseWriter, req *http.Request) {
+	logOnEndpointHit(req.RequestURI, req.Method, req.RemoteAddr)
 
-	key := mux.Vars(r)["key"]
+	key := mux.Vars(req)["key"]
 	cmd := globalStorage.memory[storageInt].Del(key, newCmdResult())
 	if cmd.err != nil {
 		http.Error(w, cmd.err.Error(), http.StatusInternalServerError)
@@ -472,10 +473,10 @@ func intDeleteHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func intIncrHandler(w http.ResponseWriter, r *http.Request) {
-	log.Logger.Info("Endpoint %s, method %s", r.RequestURI, r.Method)
+func intIncrHandler(w http.ResponseWriter, req *http.Request) {
+	logOnEndpointHit(req.RequestURI, req.Method, req.RemoteAddr)
 
-	key := mux.Vars(r)["key"]
+	key := mux.Vars(req)["key"]
 	intStorage := globalStorage.memory[storageInt].(*IntStorage)
 	cmd := intStorage.Incr(key, newCmdResult())
 	if cmd.err != nil {
@@ -492,12 +493,12 @@ func intIncrHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(contents))
 }
 
-func intIncrByHandler(w http.ResponseWriter, r *http.Request) {
-	log.Logger.Info("Endpoint %s, method %s", r.RequestURI, r.Method)
+func intIncrByHandler(w http.ResponseWriter, req *http.Request) {
+	logOnEndpointHit(req.RequestURI, req.Method, req.RemoteAddr)
 
-	key := mux.Vars(r)["key"]
-	bytes, err := io.ReadAll(r.Body)
-	defer r.Body.Close()
+	key := mux.Vars(req)["key"]
+	bytes, err := io.ReadAll(req.Body)
+	defer req.Body.Close()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -523,10 +524,10 @@ func intIncrByHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(contents))
 }
 
-func floatGetHandler(w http.ResponseWriter, r *http.Request) {
-	log.Logger.Info("Endpoint %s, method %s", r.RequestURI, r.Method)
+func floatGetHandler(w http.ResponseWriter, req *http.Request) {
+	logOnEndpointHit(req.RequestURI, req.Method, req.RemoteAddr)
 
-	key := mux.Vars(r)["key"]
+	key := mux.Vars(req)["key"]
 	cmd := globalStorage.memory[storageFloat].Get(key, newCmdResult())
 	if cmd.err != nil {
 		http.Error(w, cmd.err.Error(), http.StatusNotFound)
@@ -538,12 +539,12 @@ func floatGetHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(fmt.Sprintf("%e", cmd.result)))
 }
 
-func floatAddHandler(w http.ResponseWriter, r *http.Request) {
-	log.Logger.Info("Endpoint %s, method %s", r.RequestURI, r.Method)
+func floatAddHandler(w http.ResponseWriter, req *http.Request) {
+	logOnEndpointHit(req.RequestURI, req.Method, req.RemoteAddr)
 
-	key := mux.Vars(r)["key"]
-	body, err := io.ReadAll(r.Body)
-	defer r.Body.Close()
+	key := mux.Vars(req)["key"]
+	body, err := io.ReadAll(req.Body)
+	defer req.Body.Close()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -563,10 +564,10 @@ func floatAddHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusCreated)
 }
 
-func floatDeleteHandler(w http.ResponseWriter, r *http.Request) {
-	log.Logger.Info("Endpoint %s, method %s", r.RequestURI, r.Method)
+func floatDeleteHandler(w http.ResponseWriter, req *http.Request) {
+	logOnEndpointHit(req.RequestURI, req.Method, req.RemoteAddr)
 
-	key := mux.Vars(r)["key"]
+	key := mux.Vars(req)["key"]
 	cmd := globalStorage.memory[storageFloat].Del(key, newCmdResult())
 	if cmd.err != nil {
 		http.Error(w, cmd.err.Error(), http.StatusInternalServerError)
@@ -592,10 +593,10 @@ func uintDelHandler(w http.ResponseWriter, r *http.Request) {
 	log.Logger.Info("Uint32 DELETE endpoint is not implemented yet")
 }
 
-func delKeyHandler(w http.ResponseWriter, r *http.Request) {
-	log.Logger.Info("Endpoint %s, method %s", r.RequestURI, r.Method)
+func delKeyHandler(w http.ResponseWriter, req *http.Request) {
+	logOnEndpointHit(req.RequestURI, req.Method, req.RemoteAddr)
 
-	key := mux.Vars(r)["key"]
+	key := mux.Vars(req)["key"]
 	for _, storage := range globalStorage.memory {
 		cmd := storage.Del(key, newCmdResult())
 		if cmd.deleted {
@@ -607,11 +608,11 @@ func delKeyHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func echoHandler(w http.ResponseWriter, r *http.Request) {
-	log.Logger.Info("Endpoint %s, method %s", r.RequestURI, r.Method)
+func echoHandler(w http.ResponseWriter, req *http.Request) {
+	logOnEndpointHit(req.RequestURI, req.Method, req.RemoteAddr)
 
-	buf, err := io.ReadAll(r.Body)
-	defer r.Body.Close()
+	buf, err := io.ReadAll(req.Body)
+	defer req.Body.Close()
 
 	if err != nil && err != io.EOF {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -636,15 +637,18 @@ func echoHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(string(val)))
 }
 
-func helloHandler(w http.ResponseWriter, r *http.Request) {
-	// Hello endpoint should log transactions, since it doesn't modify the internal storage.
-	log.Logger.Info("Endpoint %s, method %s", r.RequestURI, r.Method)
+func helloHandler(w http.ResponseWriter, req *http.Request) {
+	logOnEndpointHit(req.RequestURI, req.Method, req.RemoteAddr)
 
 	const helloStr = "Hello from KVS service"
 	w.Header().Add("Content-Type", "text/plain")
 	w.Header().Add("Content-Length", fmt.Sprint(len(helloStr)))
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(helloStr))
+}
+
+func logOnEndpointHit(reqURI, method, remoteAddr string) {
+	log.Logger.Info("Endpoint %s, method %s, remoteAddr %s", reqURI, method, remoteAddr)
 }
 
 func initTransactionLogger(ctx context.Context, waitGroup *sync.WaitGroup, transactionLoggerFileName string) error {
@@ -793,6 +797,7 @@ func RunServer(settings *Settings) {
 
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5000*time.Millisecond)
 		defer cancel()
+		// TODO: The programm should wait for the Shutdown function to return before exiting.
 		if err := httpServer.Shutdown(shutdownCtx); err != nil && err != context.DeadlineExceeded {
 			log.Logger.Error("Server shutdown failed %v", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)

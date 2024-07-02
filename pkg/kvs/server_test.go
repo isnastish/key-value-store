@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -16,18 +17,11 @@ import (
 	"github.com/isnastish/kvs/pkg/version"
 )
 
-func performHttpRequest(t *testing.T, ctx context.Context, method string, endpoint string, body *bytes.Buffer) {
-	var req *http.Request
-	var err error
+func performHttpRequest(t *testing.T, ctx context.Context, method string, endpoint string, body io.Reader) {
 	var resp *http.Response
+
 	httpClient := http.Client{}
-	// We should always pass untyped nil to http.NewRequest/NewRequestWithContext,
-	// that's why the code is a bit convoluted here, otherwise we get nil-pointer dereference
-	if body == nil {
-		req, err = http.NewRequestWithContext(ctx, method, endpoint, nil)
-	} else {
-		req, err = http.NewRequestWithContext(ctx, method, endpoint, body)
-	}
+	req, err := http.NewRequestWithContext(ctx, method, endpoint, body)
 
 	done := make(chan struct{}, 1)
 	go func() {

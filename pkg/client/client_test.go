@@ -2,16 +2,22 @@ package kvs
 
 import (
 	"context"
+	"fmt"
+	"net/http"
+	_ "sync"
 	"testing"
+	"time"
 
+	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
-	_ "go.uber.org/goleak"
+	"go.uber.org/goleak"
 
-	_ "github.com/gorilla/mux"
+	"github.com/isnastish/kvs/pkg/log"
+	"github.com/isnastish/kvs/pkg/version"
 )
 
 var settings = &Settings{
-	Endpoint:     ":8080",
+	Endpoint:     "127.0.0.1:8080",
 	RetriesCount: 3,
 }
 
@@ -169,4 +175,57 @@ func Test_IntIncBy(t *testing.T) {
 	assert.Equal(t, 64, incrRes.Result())
 	delRes := client.Del(ctx, key)
 	assert.True(t, delRes.Result())
+}
+
+func Test_Retries(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	go func() {
+		shutdownDone := make(chan struct{}, 1)
+
+		endpointHitsCount := 0
+		router := mux.NewRouter().StrictSlash(true)
+		httpServer := http.Server{
+			Addr:    settings.Endpoint,
+			Handler: router,
+		}
+		subrouter := router.PathPrefix(fmt.Sprintf("/api/%s/", version.GetServiceVersion()))
+
+		subrouter.Path("/echo").HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			log.Logger.Info("Endpoint %s, method %s, remoteAddr %s", req.RequestURI, req.Method, req.RemoteAddr)
+			if endpointHitsCount == (settings.RetriesCount - 1) {
+				w.WriteHeader(http.StatusOK)
+				shutdownCtx, cancel := context.WithTimeout(context.Background(), 2000*time.Millisecond)
+				defer cancel()
+				err := httpServer.Shutdown(shutdownCtx)
+				if err != nil {
+					assert.Equal(t, context.DeadlineExceeded, err)
+				}
+				close(shutdownDone)
+				return
+			}
+			w.WriteHeader(http.StatusTooEarly)
+			endpointHitsCount++
+		}).Methods("GET")
+
+		log.Logger.Info("Test server is listening %s", httpServer.Addr)
+		err := httpServer.ListenAndServe()
+		assert.Equal(t, http.ErrServerClosed, err)
+		log.Logger.Info("Server closed gracefully")
+		// Extract:
+		// When Shutdown is called, [Serve], [ListenAndServe], and
+		// [ListenAndServeTLS] immediately return [ErrServerClosed]. Make sure the
+		// program doesn't exit and waits instead for Shutdown to return.
+		<-shutdownDone
+	}()
+
+	// Wait a bit for the server to spin up
+	time.Sleep(200 * time.Millisecond)
+
+	client := NewClient(settings)
+	ctx, cancel := context.WithTimeout(context.Background(), 10000*time.Millisecond)
+	defer cancel()
+
+	echoRes := client.Echo(ctx, "ECHO ECHo ECho Echo echo")
+	assert.True(t, echoRes.Error() == nil)
 }
