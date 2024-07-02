@@ -20,19 +20,17 @@ type handler struct {
 }
 
 type MockServer struct {
-	retryCount int
 	httpServer *http.Server
 	running    bool
 	handlers   []*handler
 }
 
-func NewMockServer(endpoint string, retryCount int) *MockServer {
+func NewMockServer(endpoint string) *MockServer {
 	return &MockServer{
 		httpServer: &http.Server{
 			Addr: endpoint,
 		},
-		retryCount: retryCount,
-		handlers:   make([]*handler, 0),
+		handlers: make([]*handler, 0),
 	}
 }
 

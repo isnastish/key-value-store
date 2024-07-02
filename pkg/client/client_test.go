@@ -15,10 +15,7 @@ import (
 	"github.com/isnastish/kvs/pkg/testing"
 )
 
-var settings = &Settings{
-	Endpoint:   "127.0.0.1:8080",
-	RetryCount: 3,
-}
+var endpoint = "127.0.0.1:8080"
 
 func zero(v interface{}) {
 	switch v.(type) {
@@ -52,21 +49,24 @@ func echo(src string) string {
 }
 
 func Test_Echo(t *testing.T) {
-	client := NewClient(settings)
+	settings := Settings{Endpoint: endpoint, RetryCount: 3}
+	client := NewClient(&settings)
 	res := client.Echo(context.Background(), "EcHo")
 	assert.True(t, res.Error() == nil)
 	assert.Equal(t, "eChO", res.Result())
 }
 
 func Test_Hello(t *testing.T) {
-	client := NewClient(settings)
+	settings := Settings{Endpoint: endpoint, RetryCount: 3}
+	client := NewClient(&settings)
 	res := client.Hello(context.Background())
 	assert.True(t, res.Error() == nil)
 	assert.Equal(t, "Hello from KVS service", res.Result())
 }
 
 func Test_IntRoundtrip(t *testing.T) {
-	client := NewClient(settings)
+	settings := Settings{Endpoint: endpoint, RetryCount: 3}
+	client := NewClient(&settings)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -86,7 +86,8 @@ func Test_IntRoundtrip(t *testing.T) {
 }
 
 func Test_FloatRoundtrip(t *testing.T) {
-	client := NewClient(settings)
+	settings := Settings{Endpoint: endpoint, RetryCount: 3}
+	client := NewClient(&settings)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -107,7 +108,8 @@ func Test_FloatRoundtrip(t *testing.T) {
 }
 
 func Test_StringRoundtrip(t *testing.T) {
-	client := NewClient(settings)
+	settings := Settings{Endpoint: endpoint, RetryCount: 3}
+	client := NewClient(&settings)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -128,7 +130,8 @@ func Test_StringRoundtrip(t *testing.T) {
 }
 
 func Test_HashMapRoundtrip(t *testing.T) {
-	client := NewClient(settings)
+	settings := Settings{Endpoint: endpoint, RetryCount: 3}
+	client := NewClient(&settings)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -149,7 +152,8 @@ func Test_HashMapRoundtrip(t *testing.T) {
 }
 
 func Test_IntIncr(t *testing.T) {
-	client := NewClient(settings)
+	settings := Settings{Endpoint: endpoint, RetryCount: 3}
+	client := NewClient(&settings)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -176,7 +180,8 @@ func Test_IntIncr(t *testing.T) {
 }
 
 func Test_IntIncBy(t *testing.T) {
-	client := NewClient(settings)
+	settings := Settings{Endpoint: endpoint, RetryCount: 3}
+	client := NewClient(&settings)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -195,7 +200,8 @@ func Test_Retries(t *testing.T) {
 
 	handlerHitCount := 0
 
-	server := testutil.NewMockServer(settings.Endpoint, settings.RetryCount)
+	settings := Settings{Endpoint: endpoint, RetryCount: 3}
+	server := testutil.NewMockServer(settings.Endpoint)
 	server.BindHandler("/echo", http.MethodGet, func(w http.ResponseWriter, req *http.Request) {
 		log.Logger.Info("Endpoint %s, method %s, remoteAddr %s", req.RequestURI, req.Method, req.RemoteAddr)
 		if handlerHitCount == (settings.RetryCount - 1) {
@@ -212,7 +218,7 @@ func Test_Retries(t *testing.T) {
 	server.Start()
 	defer server.Kill()
 
-	client := NewClient(settings)
+	client := NewClient(&settings)
 	ctx, cancel := context.WithTimeout(context.Background(), 10000*time.Millisecond)
 	defer cancel()
 
@@ -221,4 +227,26 @@ func Test_Retries(t *testing.T) {
 	echoRes := client.Echo(ctx, src)
 	assert.True(t, echoRes.Error() == nil)
 	assert.Equal(t, expected, echoRes.Result())
+}
+
+func Test_ContextDeadlineOnRetries(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	settings := Settings{Endpoint: endpoint, RetryCount: 5}
+	server := testutil.NewMockServer(settings.Endpoint)
+	server.BindHandler("/echo", http.MethodGet, func(w http.ResponseWriter, req *http.Request) {
+		log.Logger.Info("Endpoint %s, method %s, remoteAddr %s", req.RequestURI, req.Method, req.RemoteAddr)
+		time.Sleep(200 * time.Millisecond)
+		w.WriteHeader(http.StatusTooManyRequests)
+	})
+
+	server.Start()
+	defer server.Kill()
+
+	client := NewClient(&settings)
+	ctx, cancel := context.WithTimeout(context.Background(), 10000*time.Millisecond)
+	defer cancel()
+
+	echoRes := client.Echo(ctx, "ECHO")
+	assert.Equal(t, context.DeadlineExceeded, echoRes.Error())
 }
