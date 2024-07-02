@@ -52,11 +52,10 @@ type BoolCmdCallback func(c *Client, ctx context.Context, cmd *BoolCmd) *BoolCmd
 type F32CmdCallback func(c *Client, ctx context.Context, cmd *FloatCmd) *FloatCmd
 
 type Settings struct {
-	Endpoint     string
-	CertPemFile  string
-	KeyPemFile   string
-	RetriesCount int
-	// TODO: Add RetryDuration
+	Endpoint    string
+	CertPemFile string
+	KeyPemFile  string
+	RetryCount  int
 }
 
 type Client struct {
@@ -720,7 +719,7 @@ func performHttpRequest(client *Client, ctx context.Context, httpMethod string, 
 
 	req.Header.Add("User-Agent", "kvs-client")
 
-	resp, err := retry(client, ctx, client.settings.RetriesCount, 2000*time.Millisecond, req)
+	resp, err := retry(client, ctx, client.settings.RetryCount, 2000*time.Millisecond, req)
 	if err != nil {
 		result.err = err
 		return result

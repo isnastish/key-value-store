@@ -20,7 +20,7 @@ import (
 
 // TODO: Implement a throttle pattern on the server side.
 // We should limit the amount of requests a client can make to a service
-// to 10 request per second.
+// to 10 requests per second.
 
 type storageI interface {
 	Add(key string, cmd *CmdResult) *CmdResult

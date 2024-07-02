@@ -17,6 +17,7 @@ import (
 	"github.com/isnastish/kvs/pkg/version"
 )
 
+// TODO: Use the Timeout pattern here instead of performHttpRequest procedure
 func performHttpRequest(t *testing.T, ctx context.Context, method string, endpoint string, body io.Reader) {
 	var resp *http.Response
 

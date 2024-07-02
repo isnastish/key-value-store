@@ -2,23 +2,22 @@ package kvs
 
 import (
 	"context"
-	"fmt"
+	"io"
 	"net/http"
-	_ "sync"
 	"testing"
 	"time"
+	"unicode"
 
-	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/goleak"
 
 	"github.com/isnastish/kvs/pkg/log"
-	"github.com/isnastish/kvs/pkg/version"
+	"github.com/isnastish/kvs/pkg/testing"
 )
 
 var settings = &Settings{
-	Endpoint:     "127.0.0.1:8080",
-	RetriesCount: 3,
+	Endpoint:   "127.0.0.1:8080",
+	RetryCount: 3,
 }
 
 func zero(v interface{}) {
@@ -36,6 +35,20 @@ func zero(v interface{}) {
 	default:
 		panic("Invalid type")
 	}
+}
+
+func echo(src string) string {
+	res := []rune(src)
+	for i := 0; i < len(res); i++ {
+		if unicode.IsLetter(res[i]) {
+			if unicode.IsLower(res[i]) {
+				res[i] = unicode.ToUpper(res[i])
+				continue
+			}
+			res[i] = unicode.ToLower(res[i])
+		}
+	}
+	return string(res)
 }
 
 func Test_Echo(t *testing.T) {
@@ -180,52 +193,32 @@ func Test_IntIncBy(t *testing.T) {
 func Test_Retries(t *testing.T) {
 	defer goleak.VerifyNone(t)
 
-	go func() {
-		shutdownDone := make(chan struct{}, 1)
+	handlerHitCount := 0
 
-		endpointHitsCount := 0
-		router := mux.NewRouter().StrictSlash(true)
-		httpServer := http.Server{
-			Addr:    settings.Endpoint,
-			Handler: router,
+	server := testutil.NewMockServer(settings.Endpoint, settings.RetryCount)
+	server.BindHandler("/echo", http.MethodGet, func(w http.ResponseWriter, req *http.Request) {
+		log.Logger.Info("Endpoint %s, method %s, remoteAddr %s", req.RequestURI, req.Method, req.RemoteAddr)
+		if handlerHitCount == (settings.RetryCount - 1) {
+			bytes, _ := io.ReadAll(req.Body)
+			defer req.Body.Close()
+			res := echo(string(bytes))
+			w.Write([]byte(res))
+			return
 		}
-		subrouter := router.PathPrefix(fmt.Sprintf("/api/%s/", version.GetServiceVersion()))
+		w.WriteHeader(http.StatusTooEarly)
+		handlerHitCount++
+	})
 
-		subrouter.Path("/echo").HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			log.Logger.Info("Endpoint %s, method %s, remoteAddr %s", req.RequestURI, req.Method, req.RemoteAddr)
-			if endpointHitsCount == (settings.RetriesCount - 1) {
-				w.WriteHeader(http.StatusOK)
-				shutdownCtx, cancel := context.WithTimeout(context.Background(), 2000*time.Millisecond)
-				defer cancel()
-				err := httpServer.Shutdown(shutdownCtx)
-				if err != nil {
-					assert.Equal(t, context.DeadlineExceeded, err)
-				}
-				close(shutdownDone)
-				return
-			}
-			w.WriteHeader(http.StatusTooEarly)
-			endpointHitsCount++
-		}).Methods("GET")
-
-		log.Logger.Info("Test server is listening %s", httpServer.Addr)
-		err := httpServer.ListenAndServe()
-		assert.Equal(t, http.ErrServerClosed, err)
-		log.Logger.Info("Server closed gracefully")
-		// Extract:
-		// When Shutdown is called, [Serve], [ListenAndServe], and
-		// [ListenAndServeTLS] immediately return [ErrServerClosed]. Make sure the
-		// program doesn't exit and waits instead for Shutdown to return.
-		<-shutdownDone
-	}()
-
-	// Wait a bit for the server to spin up
-	time.Sleep(200 * time.Millisecond)
+	server.Start()
+	defer server.Kill()
 
 	client := NewClient(settings)
 	ctx, cancel := context.WithTimeout(context.Background(), 10000*time.Millisecond)
 	defer cancel()
 
-	echoRes := client.Echo(ctx, "ECHO ECHo ECho Echo echo")
+	src := "ECHO ECHo ECho Echo echo"
+	expected := echo(src)
+	echoRes := client.Echo(ctx, src)
 	assert.True(t, echoRes.Error() == nil)
+	assert.Equal(t, expected, echoRes.Result())
 }
