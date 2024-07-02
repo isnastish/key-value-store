@@ -55,7 +55,8 @@ type Settings struct {
 	Endpoint     string
 	CertPemFile  string
 	KeyPemFile   string
-	RetriesCount uint
+	RetriesCount int
+	// TODO: Add RetryDuration
 }
 
 type Client struct {
@@ -569,7 +570,7 @@ func mapGetCommand(c *Client, ctx context.Context, cmd *MapCmd) *MapCmd {
 		return cmd
 	}
 	val := make(map[string]string)
-	json.Unmarshal(res.contents, &val) // shouldn't fail if was properly marshalled on the server side
+	json.Unmarshal(res.contents, &val)
 	cmd.result = val
 	return cmd
 }
@@ -609,40 +610,79 @@ func oneOf(a int, rest ...int) bool {
 	return false
 }
 
+type CancellableTimer struct {
+	cancelCh chan bool
+}
+
+func newCancellableTimer() *CancellableTimer {
+	return &CancellableTimer{
+		cancelCh: make(chan bool),
+	}
+}
+
+func (t *CancellableTimer) waitWithCancel(duration time.Duration, result chan<- bool) {
+	select {
+	case <-time.After(duration):
+		result <- true
+	case <-t.cancelCh:
+		result <- false
+	}
+}
+
+func (t *CancellableTimer) cancel() {
+	close(t.cancelCh)
+}
+
 func retry(client *Client, ctx context.Context, retriesCount int, duration time.Duration, req *http.Request) (*http.Response, error) {
-	if retriesCount == 0 {
-		retriesCount = 5
+	ctimer := newCancellableTimer()
+	responseCh := make(chan *http.Response, 1)
+	errorCh := make(chan error, 1)
+
+	go func() {
+		for retries := 0; retries < retriesCount; retries++ {
+			resp, err := client.Do(req)
+			if err != nil {
+				errorCh <- err
+				return
+			}
+
+			if oneOf(resp.StatusCode,
+				http.StatusBadGateway,
+				http.StatusTooManyRequests,
+				http.StatusTooEarly,
+				http.StatusGatewayTimeout,
+				http.StatusRequestTimeout,
+				http.StatusServiceUnavailable) {
+
+				log.Logger.Info("Attempt %d failed with status %s, retrying in %v",
+					retries+1, resp.Status, duration,
+				)
+
+			} else {
+				responseCh <- resp
+				return
+			}
+
+			// We cancel the timer when context deadline signal is received.
+			resultCh := make(chan bool)
+			go ctimer.waitWithCancel(duration, resultCh)
+			if res := <-resultCh; !res {
+				return
+			}
+		}
+
+		errorCh <- errors.New("Retries limit exceeded")
+	}()
+
+	select {
+	case err := <-errorCh:
+		return nil, err
+	case resp := <-responseCh:
+		return resp, nil
+	case <-ctx.Done():
+		ctimer.cancel()
+		return nil, ctx.Err()
 	}
-
-	for retries := 0; retries < retriesCount; retries++ {
-		resp, err := client.Do(req)
-		if err != nil {
-			return nil, err
-		}
-
-		if oneOf(resp.StatusCode,
-			http.StatusBadGateway,
-			http.StatusTooManyRequests,
-			http.StatusTooEarly,
-			http.StatusGatewayTimeout,
-			http.StatusRequestTimeout,
-			http.StatusServiceUnavailable) {
-			log.Logger.Info("Failed to connect with status code %d, retrying in %v", resp.StatusCode, duration)
-		} else {
-			return resp, nil
-		}
-
-		select {
-		case <-time.After(duration):
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
-
-		duration *= 2
-	}
-
-	// this code will never get executed
-	return nil, nil
 }
 
 // Nor further reads can be done
@@ -656,40 +696,32 @@ func readResponseBody(resp *http.Response) []byte {
 // https://stackoverflow.com/questions/65950011/what-is-the-best-practice-when-using-with-context-withtimeout-in-go
 // TODO: Handle an error when a server hasn't started yet.
 // Because closing the response body will most likely block.
-func performHttpRequest(client *Client, ctx context.Context, httpMethod string, path string, contents *bytes.Buffer) *reqResult {
+func performHttpRequest(client *Client, ctx context.Context, httpMethod string, path string, body io.Reader) *reqResult {
 	var req *http.Request
 	var err error
 
 	result := &reqResult{}
 	URL := client.baseURL.JoinPath(path)
 
-	// NewRequestWithContext checks the type of the body, if the type is bytes.Buffer,
-	// and the buffer is nil, it will try to dereference a nil pointer.
-	// This is a quick and hacky way how to prevent that.
-	// Should investigate this problem more in depth.
-	// Go standard library checks whether body is equal to nil, so I have to investigte this problem more.
-	if contents == nil {
-		req, err = http.NewRequestWithContext(ctx, httpMethod, URL.String(), nil)
-	} else {
-		req, err = http.NewRequestWithContext(ctx, httpMethod, URL.String(), contents)
-	}
+	req, err = http.NewRequestWithContext(ctx, httpMethod, URL.String(), body)
 
 	if err != nil {
 		result.err = err
 		return result
 	}
 
-	if httpMethod == http.MethodPut && contents != nil {
-		req.Header.Add("Content-Length", fmt.Sprintf("%d", contents.Len()))
-		req.Header.Add("Content-Type", "application/octet-stream")
+	if httpMethod == http.MethodPut && body != nil {
+		switch t := body.(type) {
+		case *bytes.Buffer:
+			req.Header.Add("Content-Length", fmt.Sprintf("%d", t.Len()))
+			req.Header.Add("Content-Type", "application/octet-stream")
+		}
 	}
 
 	req.Header.Add("User-Agent", "kvs-client")
 
-	// Non 2xx status code doesn't cause errors
-	const retryCount = 5
-	resp, err := retry(client, ctx, retryCount, 2000*time.Millisecond, req)
-	if err != nil { //  && err != io.EOF
+	resp, err := retry(client, ctx, client.settings.RetriesCount, 2000*time.Millisecond, req)
+	if err != nil {
 		result.err = err
 		return result
 	}
