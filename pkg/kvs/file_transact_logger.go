@@ -59,7 +59,7 @@ func (l *FileTransactionLogger) writeEvent(eventType EventType, storageType Stor
 		Timestamp:   time.Now()}
 }
 
-func (l *FileTransactionLogger) writeEvents(serverShutdownCtx context.Context) {
+func (l *FileTransactionLogger) writeEvents(writeEventsCtx context.Context) {
 	defer l.file.Close()
 
 	events := make(chan Event, 16)
@@ -93,19 +93,20 @@ func (l *FileTransactionLogger) writeEvents(serverShutdownCtx context.Context) {
 				event.Timestamp.Format(time.TimeOnly),
 			)
 
-		case <-serverShutdownCtx.Done():
+		case <-writeEventsCtx.Done():
+			log.Logger.Info("Finishing writing pending events")
 			// If the server terminated, we have to write all the pending events,
 			// otherwise the events might get lost, which will be imposible to replay them.
-			if len(events) != 0 {
-				log.Logger.Info("Finishing writing pending events")
-				for event := range events {
-					event.Id = l.id
-					if !encodeEvent(&event) {
-						return
-					}
-					l.id++
-				}
-			}
+			// close(events)
+			// if len(events) != 0 {
+			// 	for event := range events {
+			// 		event.Id = l.id
+			// 		if !encodeEvent(&event) {
+			// 			return
+			// 		}
+			// 		l.id++
+			// 	}
+			// }
 			return
 		}
 	}

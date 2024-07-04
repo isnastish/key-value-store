@@ -9,7 +9,7 @@ import (
 	"github.com/gorilla/mux"
 
 	"github.com/isnastish/kvs/pkg/log"
-	"github.com/isnastish/kvs/pkg/version"
+	"github.com/isnastish/kvs/pkg/serviceinfo"
 )
 
 type handlerCallback func(w http.ResponseWriter, req *http.Request)
@@ -45,7 +45,7 @@ func (s *MockServer) BindHandler(route, method string, handlerCb func(w http.Res
 func (s *MockServer) Start() {
 	go func() {
 		router := mux.NewRouter().StrictSlash(true)
-		subrouter := router.PathPrefix(fmt.Sprintf("/api/%s/", version.GetServiceVersion()))
+		subrouter := router.PathPrefix(fmt.Sprintf("/%s/%s/", info.ServiceName(), info.ServiceVersion()))
 
 		s.httpServer.Handler = router
 

@@ -18,5 +18,6 @@ func main() {
 
 	log.SetupGlobalLogLevel(*logLevel)
 
-	kvs.RunServer(&settings)
+	service := kvs.NewKVSService(&settings)
+	service.Run()
 }

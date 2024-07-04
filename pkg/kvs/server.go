@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"os"
 	"strconv"
 	"sync"
 	"time"
@@ -15,7 +17,7 @@ import (
 	"github.com/pingcap/errors"
 
 	"github.com/isnastish/kvs/pkg/log"
-	"github.com/isnastish/kvs/pkg/version"
+	"github.com/isnastish/kvs/pkg/serviceinfo"
 )
 
 // TODO: Implement a throttle pattern on the server side.
@@ -608,6 +610,61 @@ func delKeyHandler(w http.ResponseWriter, req *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func echo(param string) string {
+	res := []rune(param)
+	for i := 0; i < len(res); i++ {
+		if unicode.IsLetter(res[i]) {
+			if unicode.IsLower(res[i]) {
+				res[i] = unicode.ToUpper(res[i])
+				continue
+			}
+			res[i] = unicode.ToLower(res[i])
+		}
+	}
+	return string(res)
+}
+
+func hello() string {
+	return fmt.Sprintf("Hello from KVS service %s", info.ServiceVersion())
+}
+
+func fibo(n int) int {
+	if n == 0 {
+		return 0
+	}
+	if n == 1 || n == 2 {
+		return 1
+	}
+	return fibo(n-1) + fibo(n-2)
+}
+
+func fiboHandler(w http.ResponseWriter, req *http.Request) {
+	// Example URL: http://127.0.0.1:5000/kvs/v1-0-0/fibo?n=12
+	logOnEndpointHit(req.RequestURI, req.Method, req.RemoteAddr)
+
+	path, err := req.URL.Parse(req.RequestURI)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	query, err := url.ParseQuery(path.RawQuery)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if !path.Query().Has("n") {
+		http.Error(w, "Invalid request syntax, {n} query parameter is not found", http.StatusBadRequest)
+		return
+	}
+
+	n, _ := strconv.Atoi(query["n"][0])
+	result := fibo(n)
+
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(strconv.Itoa(result)))
+}
+
 func echoHandler(w http.ResponseWriter, req *http.Request) {
 	logOnEndpointHit(req.RequestURI, req.Method, req.RemoteAddr)
 
@@ -619,39 +676,30 @@ func echoHandler(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// Convert lowercase letters into uppercase letters and vice-versa
-	val := []rune(string(buf))
-	for i := 0; i < len(val); i++ {
-		if unicode.IsLetter(val[i]) {
-			if unicode.IsLower(val[i]) {
-				val[i] = unicode.ToUpper(val[i])
-				continue
-			}
-			val[i] = unicode.ToLower(val[i])
-		}
-	}
+	val := echo(string(buf))
+
 	w.Header().Add("Content-Type", "text/plain")
 	w.Header().Add("Content-Length", fmt.Sprint(len(val)))
-
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(string(val)))
+	w.Write([]byte(val))
 }
 
 func helloHandler(w http.ResponseWriter, req *http.Request) {
 	logOnEndpointHit(req.RequestURI, req.Method, req.RemoteAddr)
 
-	const helloStr = "Hello from KVS service"
+	res := hello()
+
 	w.Header().Add("Content-Type", "text/plain")
-	w.Header().Add("Content-Length", fmt.Sprint(len(helloStr)))
+	w.Header().Add("Content-Length", fmt.Sprint(len(res)))
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(helloStr))
+	w.Write([]byte(res))
 }
 
 func logOnEndpointHit(reqURI, method, remoteAddr string) {
 	log.Logger.Info("Endpoint %s, method %s, remoteAddr %s", reqURI, method, remoteAddr)
 }
 
-func initTransactionLogger(ctx context.Context, waitGroup *sync.WaitGroup, transactionLoggerFileName string) error {
+func initTransactionLogger(transactionLoggerFileName string) error {
 	var err error
 	var event Event
 
@@ -695,13 +743,6 @@ func initTransactionLogger(ctx context.Context, waitGroup *sync.WaitGroup, trans
 			if err != io.EOF {
 				return err
 			}
-			// In case the server terminates, we want to make sure,
-			// that we have written all the pending events to the transaction log file.
-			waitGroup.Add(1)
-			go func() {
-				defer waitGroup.Done()
-				globalTransactionLogger.writeEvents(ctx)
-			}()
 			return nil
 		}
 
@@ -731,34 +772,78 @@ type Settings struct {
 	TransactionLogFile string
 }
 
-type Server struct {
-	*http.Server
-	ctx       context.Context
-	cancel    context.CancelFunc
-	wg        sync.WaitGroup
-	txnLogger TransactionLogger
+type RPCHandler struct {
+	method      string
+	funcName    string
+	handlerFunc func(w http.ResponseWriter, req *http.Request)
 }
 
-func RunServer(settings *Settings) {
+type KVSService struct {
+	*http.Server
+	settings    *Settings
+	wg          sync.WaitGroup
+	running     bool
+	rpcHandlers []*RPCHandler
+	// txnLogger TransactionLogger
+}
+
+// We can use deconde and encode to serialize the body of HTTP request
+// maybe method is not even necessary?
+func (s *KVSService) BindRPCHandler(method, funcName string, handlerFunc func(w http.ResponseWriter, req *http.Request)) {
+	if s.running {
+		log.Logger.Error("Failed to bind {%s} RPC, service is already running", funcName)
+		return
+	}
+
+	if handlerFunc == nil {
+		log.Logger.Error("Failed to bind {%s} RPC, handler cannot be nil", funcName)
+		return
+	}
+
+	s.rpcHandlers = append(
+		s.rpcHandlers,
+		&RPCHandler{method: method, funcName: funcName, handlerFunc: handlerFunc},
+	)
+}
+
+func NewKVSService(settings *Settings) *KVSService {
 	initStorage()
 
-	// Replay events from the transactions logger file if the server crashed.
-	// We should read all the events first before getting to processing all transactions
-	serverShutdownCtx, serverCancelFunc := context.WithCancel(context.Background())
-	waitGroup := sync.WaitGroup{}
-	if err := initTransactionLogger(serverShutdownCtx, &waitGroup, settings.TransactionLogFile); err != nil {
-		log.Logger.Panic("Failed to initialize the transaction logger %v", err)
+	// TODO: More robust error handling
+	if err := initTransactionLogger(settings.TransactionLogFile); err != nil {
+		log.Logger.Panic("Failed to initialize transaction logger %v", err)
+		os.Exit(1)
+	}
+
+	// https://stackoverflow.com/questions/39320025/how-to-stop-http-listenandserve
+	service := &KVSService{
+		Server: &http.Server{
+			Addr: settings.Endpoint,
+		},
+		settings:    settings,
+		rpcHandlers: make([]*RPCHandler, 0),
+	}
+
+	service.BindRPCHandler("POST", "echo", echoHandler)
+	service.BindRPCHandler("POST", "hello", helloHandler)
+	service.BindRPCHandler("POST", "fibo", fiboHandler)
+
+	return service
+}
+
+func (s *KVSService) Run() {
+	if s.running {
+		log.Logger.Error("Service is already running")
+		return
 	}
 
 	router := mux.NewRouter().StrictSlash(true)
-	subrouter := router.PathPrefix(fmt.Sprintf("/api/%s/", version.GetServiceVersion())).Subrouter()
+	subrouter := router.PathPrefix(fmt.Sprintf("/%s/%s/", info.ServiceName(), info.ServiceVersion())).Subrouter()
 
-	// NOTE: The echo endpoint should be bound to GET method and contain a body,
-	// even though it violates the rules of REST api.
-	// Since we don't store the received string anywhere on the server side.
-	// That will simplify error processing on the client side.
-	subrouter.Path("/echo").HandlerFunc(echoHandler).Methods("GET")
-	subrouter.Path("/hello").HandlerFunc(helloHandler).Methods("GET")
+	// Bind all rpc handlers
+	for _, hd := range s.rpcHandlers {
+		subrouter.Path("/" + hd.funcName).HandlerFunc(hd.handlerFunc).Methods(hd.method)
+	}
 
 	subrouter.Path("/mapadd/{key:[0-9A-Za-z_]+}").HandlerFunc(mapAddHandler).Methods("PUT")
 	subrouter.Path("/mapget/{key:[0-9A-Za-z_]+}").HandlerFunc(mapGetHandler).Methods("GET")
@@ -785,38 +870,56 @@ func RunServer(settings *Settings) {
 	// Endpoint to delete a key from any type of storage
 	subrouter.Path("/del/{key:[0-9A-Za-z_]+}").HandlerFunc(delKeyHandler).Methods("DELETE")
 
-	// https://stackoverflow.com/questions/39320025/how-to-stop-http-listenandserve
-	httpServer := http.Server{
-		Addr:    settings.Endpoint,
-		Handler: router,
+	// Run() function doesn't assume that it will be executed concurrently
+	// We might, and most likely will have issues with Kill() procedure,
+	// what if s.Server.Handler is not initialized yet?
+	s.Server.Handler = router
+	s.running = true
+
+	// subrouter.Path("/kill").HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+	// 	logOnEndpointHit(req.RequestURI, req.Method, req.RemoteAddr)
+	// 	log.Logger.Info("Killing the service")
+
+	// 	ctx, cancel := context.WithTimeout(context.Background(), 3000*time.Millisecond)
+	// 	defer cancel()
+	// 	if err := s.Server.Shutdown(ctx); err != nil && err != context.DeadlineExceeded {
+	// 		log.Logger.Error("Server shutdown failed %v", err)
+	// 		return
+	// 	}
+	// }).Methods("POST")
+
+	// In case the server terminates, we want to make sure
+	// that we have written all the pending events to the transaction log file.
+	// writeEventsCtx, finishEventProcessing := context.WithCancel(context.Background())
+	// defer finishEventProcessing()
+
+	// s.wg = sync.WaitGroup{}
+	// s.wg.Add(1)
+	// go func() {
+	// 	defer s.wg.Done()
+	// 	globalTransactionLogger.writeEvents(writeEventsCtx)
+	// }()
+
+	log.Logger.Info("Listening %s", s.settings.Endpoint)
+	if err := s.Server.ListenAndServe(); err != http.ErrServerClosed {
+		log.Logger.Error("Server terminated abnormally %v", err)
+		return
 	}
-
-	// kill the server endpoint. Any method would work
-	subrouter.Path("/kill").HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		log.Logger.Info("Killing the server")
-
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5000*time.Millisecond)
-		defer cancel()
-		// TODO: The programm should wait for the Shutdown function to return before exiting.
-		if err := httpServer.Shutdown(shutdownCtx); err != nil && err != context.DeadlineExceeded {
-			log.Logger.Error("Server shutdown failed %v", err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-	})
-
-	waitGroup.Add(1)
-	go func() {
-		defer serverCancelFunc()
-		defer waitGroup.Done()
-		log.Logger.Info("Listening %s", settings.Endpoint)
-		if err := httpServer.ListenAndServe(); err != http.ErrServerClosed {
-			log.Logger.Panic("Server terminated abnormally %v", err)
-			return
-		}
-	}()
-	waitGroup.Wait()
+	// s.wg.Wait()
 
 	log.Logger.Info("Server was closed gracefully")
+}
+
+func (s *KVSService) Kill() {
+	if !s.running {
+		log.Logger.Error("Service is NOT running")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3000*time.Millisecond)
+	defer cancel()
+	if err := s.Server.Shutdown(ctx); err != nil && err != context.DeadlineExceeded {
+		log.Logger.Error("Server shutdown failed %v", err)
+		return
+	}
 }
