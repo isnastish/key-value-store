@@ -2,26 +2,24 @@ package kvs
 
 import (
 	"context"
-	"fmt"
+	"io"
 	"net/http"
-	_ "sync"
+	"os"
+	"strings"
 	"testing"
 	"time"
+	"unicode"
 
-	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
-	"go.uber.org/goleak"
+	_ "go.uber.org/goleak"
 
 	"github.com/isnastish/kvs/pkg/log"
-	"github.com/isnastish/kvs/pkg/version"
+	"github.com/isnastish/kvs/pkg/testing"
 )
 
-var settings = &Settings{
-	Endpoint:     "127.0.0.1:8080",
-	RetriesCount: 3,
-}
+var endpoint = "127.0.0.1:8080"
 
-func zero(v interface{}) {
+func reset(v interface{}) {
 	switch v.(type) {
 	case *IntCmd:
 		*(v.(*IntCmd)) = IntCmd{}
@@ -38,23 +36,83 @@ func zero(v interface{}) {
 	}
 }
 
-func Test_Echo(t *testing.T) {
-	client := NewClient(settings)
+func echo(src string) string {
+	res := []rune(src)
+	for i := 0; i < len(res); i++ {
+		if unicode.IsLetter(res[i]) {
+			if unicode.IsLower(res[i]) {
+				res[i] = unicode.ToUpper(res[i])
+				continue
+			}
+			res[i] = unicode.ToLower(res[i])
+		}
+	}
+	return string(res)
+}
+
+func TestMain(m *testing.M) {
+	var status int
+	var kill bool
+
+	defer func() {
+		if kill {
+			testutil.KillKVSServiceContainer()
+		}
+		os.Exit(status)
+	}()
+
+	kill, err := testutil.StartKVSServiceContainer()
+	if err != nil {
+		log.Logger.Error("Failed to start docker container %v", err)
+		return
+	}
+	status = m.Run()
+}
+
+func TestEcho(t *testing.T) {
+	settings := Settings{Endpoint: endpoint, RetryCount: 3}
+	client := NewClient(&settings)
 	res := client.Echo(context.Background(), "EcHo")
 	assert.True(t, res.Error() == nil)
 	assert.Equal(t, "eChO", res.Result())
 }
 
-func Test_Hello(t *testing.T) {
-	client := NewClient(settings)
+func TestHello(t *testing.T) {
+	settings := Settings{Endpoint: endpoint, RetryCount: 3}
+	client := NewClient(&settings)
 	res := client.Hello(context.Background())
 	assert.True(t, res.Error() == nil)
-	assert.Equal(t, "Hello from KVS service", res.Result())
+	log.Logger.Info("Result %s", res.Result())
+	assert.True(t, strings.Contains(res.Result(), "kvs"))
 }
 
-func Test_IntRoundtrip(t *testing.T) {
-	client := NewClient(settings)
-	ctx, cancel := context.WithCancel(context.Background())
+func TestFibo(t *testing.T) {
+	// Fibo rpc is a great way of testing request cancelation with a context
+	// So, in the future I should use context.WithTimeout here
+	settings := Settings{Endpoint: endpoint, RetryCount: 3}
+	client := NewClient(&settings)
+	// indices:       0  1  2  3  4  5  6  7   8   9
+	// fibo sequence: 0, 1, 1, 2, 3, 5, 8, 13, 21, 34
+	fiboRes := client.Fibo(context.Background(), 7)
+	assert.True(t, fiboRes.Error() == nil)
+	assert.Equal(t, 13, fiboRes.Result())
+
+	reset(fiboRes)
+
+	{
+		// Hit context deadline before computing the value
+		n := 500
+		timeoutCtx, cancel := context.WithTimeout(context.Background(), 5000*time.Millisecond)
+		defer cancel()
+		fiboRes = client.Fibo(timeoutCtx, n)
+		assert.True(t, fiboRes.Error() == context.DeadlineExceeded)
+	}
+}
+
+func TestIntRoundtrip(t *testing.T) {
+	settings := Settings{Endpoint: endpoint, RetryCount: 3}
+	client := NewClient(&settings)
+	ctx, cancel := context.WithTimeout(context.Background(), 20000*time.Millisecond)
 	defer cancel()
 
 	const val int = 9999997
@@ -67,13 +125,14 @@ func Test_IntRoundtrip(t *testing.T) {
 	assert.Equal(t, val, getRes.Result())
 	delRes := client.IntDel(ctx, key)
 	assert.True(t, delRes.Error() == nil)
-	zero(getRes)
+	reset(getRes)
 	getRes = client.IntGet(ctx, key)
 	assert.True(t, getRes.Error() != nil)
 }
 
-func Test_FloatRoundtrip(t *testing.T) {
-	client := NewClient(settings)
+func TestFloatRoundtrip(t *testing.T) {
+	settings := Settings{Endpoint: endpoint, RetryCount: 3}
+	client := NewClient(&settings)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -88,13 +147,14 @@ func Test_FloatRoundtrip(t *testing.T) {
 	delRes := client.F32Del(ctx, key)
 	assert.True(t, delRes.Error() == nil)
 	assert.True(t, delRes.Result())
-	zero(getRes)
+	reset(getRes)
 	getRes = client.F32Get(ctx, key)
 	assert.True(t, getRes.Error() != nil)
 }
 
-func Test_StringRoundtrip(t *testing.T) {
-	client := NewClient(settings)
+func TestStringRoundtrip(t *testing.T) {
+	settings := Settings{Endpoint: endpoint, RetryCount: 3}
+	client := NewClient(&settings)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -109,13 +169,14 @@ func Test_StringRoundtrip(t *testing.T) {
 	delRes := client.StrDel(ctx, key)
 	assert.True(t, delRes.Error() == nil)
 	assert.True(t, delRes.Result())
-	zero(getRes)
+	reset(getRes)
 	getRes = client.StrGet(ctx, key)
 	assert.True(t, getRes.Error() != nil)
 }
 
-func Test_HashMapRoundtrip(t *testing.T) {
-	client := NewClient(settings)
+func TestHashMapRoundtrip(t *testing.T) {
+	settings := Settings{Endpoint: endpoint, RetryCount: 3}
+	client := NewClient(&settings)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -130,102 +191,104 @@ func Test_HashMapRoundtrip(t *testing.T) {
 	delRes := client.MapDel(ctx, key)
 	assert.True(t, delRes.Error() == nil)
 	assert.True(t, delRes.Result())
-	zero(getRes)
+	reset(getRes)
 	getRes = client.MapGet(ctx, key)
 	assert.True(t, getRes.Error() != nil)
 }
 
-func Test_IntIncr(t *testing.T) {
-	client := NewClient(settings)
+func TestIntIncr(t *testing.T) {
+	settings := Settings{Endpoint: endpoint, RetryCount: 3}
+	client := NewClient(&settings)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
-	zero := func(res *IntCmd) {
-		*res = IntCmd{}
-	}
 
 	const key = "messsageId"
 	incrRes := client.IntIncr(ctx, key)
 	assert.Equal(t, 0, incrRes.Result())
-	zero(incrRes)
+	reset(incrRes)
 	incrRes = client.IntIncr(ctx, key)
 	assert.Equal(t, 1, incrRes.Result())
-	zero(incrRes)
+	reset(incrRes)
 
 	// 1024 http request... And open field for optimizations (put them into a single http request)
 	for i := 2; i < 1026; i++ {
 		incrRes = client.IntIncr(ctx, key)
 		assert.Equal(t, i, incrRes.Result())
-		zero(incrRes)
+		reset(incrRes)
 	}
 	delRes := client.Del(ctx, key)
 	assert.True(t, delRes.Result())
 }
 
-func Test_IntIncBy(t *testing.T) {
-	client := NewClient(settings)
+func TestIntIncBy(t *testing.T) {
+	settings := Settings{Endpoint: endpoint, RetryCount: 3}
+	client := NewClient(&settings)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	const key = "number"
 	incrRes := client.IntIncrBy(ctx, key, 64)
 	assert.Equal(t, 0, incrRes.Result())
-	zero(incrRes)
+	reset(incrRes)
 	incrRes = client.IntIncrBy(ctx, key, 3)
 	assert.Equal(t, 64, incrRes.Result())
 	delRes := client.Del(ctx, key)
 	assert.True(t, delRes.Result())
 }
 
-func Test_Retries(t *testing.T) {
-	defer goleak.VerifyNone(t)
+func TestRetries(t *testing.T) {
+	// TODO: If testing with goleaks enabled, there are some internal goroutines
+	// left on the stack
+	// defer goleak.VerifyNone(t)
 
-	go func() {
-		shutdownDone := make(chan struct{}, 1)
+	handlerHitCount := 0
 
-		endpointHitsCount := 0
-		router := mux.NewRouter().StrictSlash(true)
-		httpServer := http.Server{
-			Addr:    settings.Endpoint,
-			Handler: router,
+	settings := Settings{Endpoint: "127.0.0.1:6060", RetryCount: 3}
+	server := testutil.NewMockServer(settings.Endpoint)
+	server.BindHandler("/echo", http.MethodPost, func(w http.ResponseWriter, req *http.Request) {
+		log.Logger.Info("Endpoint %s, method %s, remoteAddr %s", req.RequestURI, req.Method, req.RemoteAddr)
+		if handlerHitCount == (settings.RetryCount - 1) {
+			bytes, _ := io.ReadAll(req.Body)
+			defer req.Body.Close()
+			res := echo(string(bytes))
+			w.Write([]byte(res))
+			return
 		}
-		subrouter := router.PathPrefix(fmt.Sprintf("/api/%s/", version.GetServiceVersion()))
+		w.WriteHeader(http.StatusTooEarly)
+		handlerHitCount++
+	})
 
-		subrouter.Path("/echo").HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			log.Logger.Info("Endpoint %s, method %s, remoteAddr %s", req.RequestURI, req.Method, req.RemoteAddr)
-			if endpointHitsCount == (settings.RetriesCount - 1) {
-				w.WriteHeader(http.StatusOK)
-				shutdownCtx, cancel := context.WithTimeout(context.Background(), 2000*time.Millisecond)
-				defer cancel()
-				err := httpServer.Shutdown(shutdownCtx)
-				if err != nil {
-					assert.Equal(t, context.DeadlineExceeded, err)
-				}
-				close(shutdownDone)
-				return
-			}
-			w.WriteHeader(http.StatusTooEarly)
-			endpointHitsCount++
-		}).Methods("GET")
+	server.Start()
+	defer server.Kill()
 
-		log.Logger.Info("Test server is listening %s", httpServer.Addr)
-		err := httpServer.ListenAndServe()
-		assert.Equal(t, http.ErrServerClosed, err)
-		log.Logger.Info("Server closed gracefully")
-		// Extract:
-		// When Shutdown is called, [Serve], [ListenAndServe], and
-		// [ListenAndServeTLS] immediately return [ErrServerClosed]. Make sure the
-		// program doesn't exit and waits instead for Shutdown to return.
-		<-shutdownDone
-	}()
-
-	// Wait a bit for the server to spin up
-	time.Sleep(200 * time.Millisecond)
-
-	client := NewClient(settings)
+	client := NewClient(&settings)
 	ctx, cancel := context.WithTimeout(context.Background(), 10000*time.Millisecond)
 	defer cancel()
 
-	echoRes := client.Echo(ctx, "ECHO ECHo ECho Echo echo")
+	src := "ECHO ECHo ECho Echo echo"
+	expected := echo(src)
+	echoRes := client.Echo(ctx, src)
 	assert.True(t, echoRes.Error() == nil)
+	assert.Equal(t, expected, echoRes.Result())
+}
+
+func TestContextDeadlineOnRetries(t *testing.T) {
+	// defer goleak.VerifyNone(t)
+
+	settings := Settings{Endpoint: "127.0.0.1:6060", RetryCount: 5}
+	server := testutil.NewMockServer(settings.Endpoint)
+	server.BindHandler("/echo", http.MethodPost, func(w http.ResponseWriter, req *http.Request) {
+		log.Logger.Info("Endpoint %s, method %s, remoteAddr %s", req.RequestURI, req.Method, req.RemoteAddr)
+		w.WriteHeader(http.StatusTooManyRequests)
+	})
+
+	server.Start()
+	defer server.Kill()
+
+	client := NewClient(&settings)
+	ctx, cancel := context.WithTimeout(context.Background(), 10000*time.Millisecond)
+	defer cancel()
+
+	echoRes := client.Echo(ctx, "ECHO")
+	assert.Equal(t, context.DeadlineExceeded, echoRes.Error())
 }

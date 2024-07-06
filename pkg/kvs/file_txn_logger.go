@@ -45,7 +45,7 @@ func newFileTransactionsLogger(filePath string) (*FileTransactionLogger, error) 
 	}, nil
 }
 
-func (l *FileTransactionLogger) writeEvent(eventType EventType, storageType StorageType, key string, values ...interface{}) {
+func (l *FileTransactionLogger) writeTransaction(eventType EventType, storageType StorageType, key string, values ...interface{}) {
 	// NOTE: Intentionally not specifying id, since it will be accessed by multiple goroutines
 	var val interface{}
 	if len(values) > 0 {
@@ -59,7 +59,7 @@ func (l *FileTransactionLogger) writeEvent(eventType EventType, storageType Stor
 		Timestamp:   time.Now()}
 }
 
-func (l *FileTransactionLogger) writeEvents(serverShutdownCtx context.Context) {
+func (l *FileTransactionLogger) processTransactions(shutdownContext context.Context) {
 	defer l.file.Close()
 
 	events := make(chan Event, 16)
@@ -93,11 +93,11 @@ func (l *FileTransactionLogger) writeEvents(serverShutdownCtx context.Context) {
 				event.Timestamp.Format(time.TimeOnly),
 			)
 
-		case <-serverShutdownCtx.Done():
+		case <-shutdownContext.Done():
+			log.Logger.Info("Finishing writing pending events")
 			// If the server terminated, we have to write all the pending events,
 			// otherwise the events might get lost, which will be imposible to replay them.
 			if len(events) != 0 {
-				log.Logger.Info("Finishing writing pending events")
 				for event := range events {
 					event.Id = l.id
 					if !encodeEvent(&event) {
