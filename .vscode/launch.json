@@ -10,8 +10,8 @@
             "args": [
                 "--endpoint",
                 ":8080",
-                "--loglevel", 
-                "DEBUG", // DISABLED // to disable logging
+                "--log_level", 
+                "DEBUG",
             ] 
         }, 
     ]

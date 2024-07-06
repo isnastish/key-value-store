@@ -3,7 +3,10 @@ package testutil
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
+	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -12,11 +15,9 @@ import (
 	"github.com/isnastish/kvs/pkg/serviceinfo"
 )
 
-type handlerCallback func(w http.ResponseWriter, req *http.Request)
-
 type handler struct {
 	method, route string
-	cb            handlerCallback
+	cb            func(w http.ResponseWriter, req *http.Request)
 }
 
 type MockServer struct {
@@ -62,7 +63,6 @@ func (s *MockServer) Start() {
 	}()
 }
 
-// Pass the context directly as an argument to Kill?
 func (s *MockServer) Kill() {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
@@ -70,4 +70,92 @@ func (s *MockServer) Kill() {
 		log.Logger.Panic("Failed to shutdown the server %v", err)
 		return
 	}
+}
+
+var kvsServiceImage = "kvs:latest"
+
+func doesKVSDockerImageExist() (bool, error) {
+	exists := false
+	cmd := exec.Command("docker", "inspect", "--type=image", kvsServiceImage)
+	stdout, err := cmd.Output()
+	if err != nil {
+		return exists, err
+	}
+
+	if strings.Contains(string(stdout), "No such image") {
+		return exists, nil
+	}
+	exists = true
+
+	return exists, nil
+}
+
+// TODO: Accept the port
+func StartKVSServiceContainer() (bool, error) {
+	kill := false
+
+	exists, err := doesKVSDockerImageExist()
+	if err != nil {
+		return kill, err
+	}
+
+	if !exists {
+		log.Logger.Fatal("Image %s doesn't exist", kvsServiceImage)
+	}
+
+	cmd := exec.Command("docker", "run", "--rm", "--publish", "8080:8080", "--name", "kvs-service", kvsServiceImage)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return kill, err
+	}
+	defer stdout.Close()
+
+	if err := cmd.Start(); err != nil {
+		return kill, err
+	}
+
+	kill = true // kill the container running the kvs-service
+
+	// Wait at maximum three minutes for the container to boot up
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	var strBuilder strings.Builder
+
+	readBuf := make([]byte, 256)
+	for {
+		select {
+		case <-ctx.Done():
+			return kill, ctx.Err()
+		default:
+		}
+
+		n, err := stdout.Read(readBuf[:])
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			log.Logger.Fatal("reached end of stdout %v", err)
+		}
+		if n > 0 {
+			outStr := string(readBuf[:n])
+			log.Logger.Info(outStr)
+			strBuilder.WriteString(outStr)
+			if strings.Contains(strBuilder.String(), "service is running") {
+				time.Sleep(500 * time.Millisecond)
+				break
+			}
+		}
+	}
+	return kill, nil
+}
+
+func KillKVSServiceContainer() {
+	log.Logger.Info("Killing docker container")
+	cmd := exec.Command("docker", "rm", "--force", "kvs-service")
+	if err := cmd.Run(); err != nil {
+		log.Logger.Error("Failed to kill kvs-service container")
+		return
+	}
+	log.Logger.Info("Killed kvs-service container")
 }

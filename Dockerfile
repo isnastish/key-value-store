@@ -13,6 +13,10 @@ FROM golang:1.22-alpine as run-env
 
 COPY --from=build-env /go/bin/services/kvs /kvs/
 
+# Expose port 8080 for TCP connection (to be used with -P flag)
+# Exposed port can be ovewritten with --publish option used with docker run
+EXPOSE 8080/tcp
+
 ENTRYPOINT [ "/kvs/kvs" ]
 
 CMD [ "--endpoint",  ":8080"]

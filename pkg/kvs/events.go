@@ -5,18 +5,8 @@ import (
 )
 
 type EventType int
-type StorageType int
 
 const maxEventCount = ^uint64(0)
-
-const (
-	_ StorageType = iota
-	storageInt
-	storageFloat
-	storageString
-	storageUint
-	storageMap
-)
 
 const (
 	_ EventType = iota
@@ -45,13 +35,13 @@ func (e EventType) toStr() string {
 
 func (e StorageType) toStr() string {
 	switch e {
-	case storageInt:
+	case storageTypeInt:
 		return "IntStorage"
-	case storageFloat:
+	case storageTypeFloat:
 		return "FloatStorage"
-	case storageString:
+	case storageTypeString:
 		return "StringStorage"
-	case storageMap:
+	case storageTypeMap:
 		return "MapStorage"
 	}
 	return "UnknownStorage"

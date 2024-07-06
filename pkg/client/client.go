@@ -664,6 +664,8 @@ func doRequestWithRetry(client *Client, ctx context.Context, retriesCount int, d
 
 	go func() {
 		for retries := 0; retries < retriesCount; retries++ {
+			// NOTE: If the service crashed while making the request,
+			// Do procedure will block until we hit context's deadline (if one is provided).
 			resp, err := client.Do(req)
 			if err != nil {
 				errorCh <- err
@@ -755,6 +757,7 @@ func performHttpRequest(client *Client, ctx context.Context, httpMethod string, 
 
 	if oneOf[string](httpMethod, http.MethodGet, http.MethodPost, http.MethodPut) {
 		stream, _ = io.ReadAll(resp.Body)
+		result.contents = stream
 		return result
 	}
 
