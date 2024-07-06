@@ -77,7 +77,7 @@ type baseCmd struct {
 	args []interface{}
 }
 
-type reqResult struct {
+type Result struct {
 	cmdStatus
 	contents []byte
 }
@@ -625,26 +625,26 @@ func mapDelCommand(client *Client, ctx context.Context, cmd *BoolCmd) *BoolCmd {
 	return cmd
 }
 
-func oneOf(a int, rest ...int) bool {
+func oneOf[T string | int](src T, rest ...T) bool {
 	for _, v := range rest {
-		if a == v {
+		if src == v {
 			return true
 		}
 	}
 	return false
 }
 
-type CancellableTimer struct {
+type cancellableTimer struct {
 	cancelCh chan bool
 }
 
-func newCancellableTimer() *CancellableTimer {
-	return &CancellableTimer{
+func newCancellableTimer() *cancellableTimer {
+	return &cancellableTimer{
 		cancelCh: make(chan bool),
 	}
 }
 
-func (t *CancellableTimer) waitWithCancel(duration time.Duration, result chan<- bool) {
+func (t *cancellableTimer) waitWithCancel(duration time.Duration, result chan<- bool) {
 	select {
 	case <-time.After(duration):
 		result <- true
@@ -653,11 +653,11 @@ func (t *CancellableTimer) waitWithCancel(duration time.Duration, result chan<- 
 	}
 }
 
-func (t *CancellableTimer) cancel() {
+func (t *cancellableTimer) cancel() {
 	close(t.cancelCh)
 }
 
-func doRequest(client *Client, ctx context.Context, retriesCount int, duration time.Duration, req *http.Request) (*http.Response, error) {
+func doRequestWithRetry(client *Client, ctx context.Context, retriesCount int, duration time.Duration, req *http.Request) (*http.Response, error) {
 	ctimer := newCancellableTimer()
 	responseCh := make(chan *http.Response, 1)
 	errorCh := make(chan error, 1)
@@ -670,7 +670,7 @@ func doRequest(client *Client, ctx context.Context, retriesCount int, duration t
 				return
 			}
 
-			if oneOf(resp.StatusCode,
+			if oneOf[int](resp.StatusCode,
 				http.StatusBadGateway,
 				http.StatusTooManyRequests,
 				http.StatusTooEarly,
@@ -709,25 +709,19 @@ func doRequest(client *Client, ctx context.Context, retriesCount int, duration t
 	}
 }
 
-func readResponseBody(resp *http.Response) []byte {
-	buf := make([]byte, resp.ContentLength)
-	resp.Body.Read(buf)
-	defer resp.Body.Close()
-	return buf
-}
-
 // https://stackoverflow.com/questions/65950011/what-is-the-best-practice-when-using-with-context-withtimeout-in-go
 // TODO: Handle an error when a server hasn't started yet.
 // Because closing the response body will most likely block.
-func performHttpRequest(client *Client, ctx context.Context, httpMethod string, url string, body io.Reader) *reqResult {
+func performHttpRequest(client *Client, ctx context.Context, httpMethod string, url string, body io.Reader) *Result {
 	var req *http.Request
 	var err error
-	var res *reqResult = &reqResult{}
+	var result = &Result{}
+	var stream []byte
 
 	req, err = http.NewRequestWithContext(ctx, httpMethod, url, body)
 	if err != nil {
-		res.err = err
-		return res
+		result.err = err
+		return result
 	}
 
 	if httpMethod == http.MethodPut && body != nil {
@@ -740,75 +734,36 @@ func performHttpRequest(client *Client, ctx context.Context, httpMethod string, 
 
 	req.Header.Add("User-Agent", "kvs-client")
 
-	resp, err := doRequest(client, ctx, client.settings.RetryCount, 2000*time.Millisecond, req)
+	resp, err := doRequestWithRetry(client, ctx, client.settings.RetryCount, 2000*time.Millisecond, req)
 	if err != nil {
-		res.err = err
-		return res
+		result.err = err
+		return result
 	}
 
-	res.status = resp.Status
-	res.statusCode = resp.StatusCode
+	defer resp.Body.Close()
 
-	// When GET method is used, and resource is not found, the response body will contain an error message
-	// and the status code is set to http.StatusNotFound, or http.StatusInternalServerError when a server error occured.
-	// So we have to read the response body in order to extract an error message.
-	if (httpMethod == http.MethodGet) && (resp.StatusCode != http.StatusOK) {
-		bytes, _ := io.ReadAll(resp.Body)
-		defer resp.Body.Close()
-		res.err = errors.New(string(bytes))
-		return res
+	result.status = resp.Status
+	result.statusCode = resp.StatusCode
+
+	if resp.StatusCode != http.StatusOK {
+		// If the response status doesn't equal to 200, the body will contain an error message
+		// prescribed by the service.
+		stream, _ = io.ReadAll(resp.Body)
+		result.err = errors.New(string(stream))
+		return result
 	}
 
-	// All PUT requests return http.StatusCreated on success
-	if (httpMethod == http.MethodPut) && (resp.StatusCode != http.StatusCreated) {
-		bytes, _ := io.ReadAll(resp.Body)
-		defer resp.Body.Close()
-		res.err = errors.New(string(bytes))
-		return res
-	}
-
-	if (httpMethod == http.MethodPost) && (resp.StatusCode == http.StatusOK) {
-		if resp.ContentLength >= 0 { // handle zero?
-			bytes, err := io.ReadAll(resp.Body)
-			if err != nil {
-				res.err = err
-				return res
-			}
-			res.contents = bytes
-			return res
-		}
-	}
-
-	// TODO: Don't use HEAD method for the kill, use POST instead
-	// We're not getting any information from the server
-	// HEAD requests are only used for sending signals to the server,
-	// like Kill() API function. The response body will contain an error if any.
-	// So, if the status is not http.StatusOK, we have to extract an error.
-	if (httpMethod == http.MethodHead) && (resp.StatusCode != http.StatusOK) {
-		// TODO: Parse the reponse body
-		return res
+	if oneOf[string](httpMethod, http.MethodGet, http.MethodPost, http.MethodPut) {
+		stream, _ = io.ReadAll(resp.Body)
+		return result
 	}
 
 	// On a successfull DELETE request, the response MAY contain a Deleted header,
 	// which is used to identify whether a resource was deleted or not.
 	if httpMethod == http.MethodDelete {
-		res.contents = []byte(resp.Header.Get("Deleted"))
-		return res
+		result.contents = []byte(resp.Header.Get("Deleted"))
+		return result
 	}
 
-	// On a successfull GET request, the body will contain the result bytes,
-	// and a ContentLength header is set to the amount of bytes
-	if httpMethod == http.MethodGet {
-		res.contents = readResponseBody(resp)
-		return res
-	}
-
-	// On a successfull PUT request, the response body will contain the value
-	// that was in a storage previously. That is true of IntIncr and IntIncrBy procedures.
-	if httpMethod == http.MethodPut {
-		res.contents = readResponseBody(resp)
-		return res
-	}
-
-	return res
+	return result
 }

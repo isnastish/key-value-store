@@ -22,7 +22,7 @@ func TestTrailingSlash(t *testing.T) {
 
 	settings := Settings{Endpoint: endpoint, TransactionLogFile: "transactions.bin"}
 
-	service := NewKVSService(&settings)
+	service := NewService(&settings)
 	defer os.Remove(settings.TransactionLogFile)
 
 	go service.Run()

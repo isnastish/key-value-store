@@ -54,7 +54,7 @@ func TestMain(m *testing.M) {
 	var status int
 
 	settings := kvs.Settings{Endpoint: endpoint, TransactionLogFile: "transactions.bin"}
-	service := kvs.NewKVSService(&settings)
+	service := kvs.NewService(&settings)
 
 	go service.Run()
 	// Wait a bit for the service to spin up

@@ -24,6 +24,34 @@ import (
 // We should limit the amount of requests a client can make to a service
 // to 10 requests per second.
 
+type Settings struct {
+	Endpoint    string
+	CertPemFile string
+	KeyPemFile  string
+	Username    string
+	Password    string
+	// specify transaction logger type
+	// either a database, or a transaction log file
+	TransactionLogFile string
+}
+
+type HandlerCallback func(w http.ResponseWriter, req *http.Request)
+
+type RPCHandler struct {
+	method   string
+	funcName string
+	cb       HandlerCallback
+}
+
+type Service struct {
+	*http.Server
+	settings    *Settings
+	wg          sync.WaitGroup
+	running     bool
+	rpcHandlers []*RPCHandler
+	// txnLogger TransactionLogger
+}
+
 type storageI interface {
 	Add(key string, cmd *CmdResult) *CmdResult
 	Get(key string, cmd *CmdResult) *CmdResult
@@ -309,7 +337,7 @@ func stringAddHandler(w http.ResponseWriter, req *http.Request) {
 	}
 	globalTransactionLogger.writeEvent(eventAdd, storageString, key, string(val))
 
-	w.WriteHeader(http.StatusCreated)
+	w.WriteHeader(http.StatusOK)
 }
 
 func stringGetHandler(w http.ResponseWriter, req *http.Request) {
@@ -346,7 +374,7 @@ func stringDeleteHandler(w http.ResponseWriter, req *http.Request) {
 		w.Header().Add("Deleted", "1")
 	}
 
-	w.WriteHeader(http.StatusNoContent)
+	w.WriteHeader(http.StatusOK)
 }
 
 func mapAddHandler(w http.ResponseWriter, req *http.Request) {
@@ -372,7 +400,7 @@ func mapAddHandler(w http.ResponseWriter, req *http.Request) {
 	}
 	globalTransactionLogger.writeEvent(eventAdd, storageMap, key, hashMap)
 
-	w.WriteHeader(http.StatusCreated)
+	w.WriteHeader(http.StatusOK)
 }
 
 func mapGetHandler(w http.ResponseWriter, req *http.Request) {
@@ -413,7 +441,7 @@ func mapDeleteHandler(w http.ResponseWriter, req *http.Request) {
 	if cmd.deleted {
 		w.Header().Add("Deleted", "1")
 	}
-	w.WriteHeader(http.StatusNoContent)
+	w.WriteHeader(http.StatusOK)
 }
 
 func intAddHandler(w http.ResponseWriter, req *http.Request) {
@@ -437,7 +465,7 @@ func intAddHandler(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	globalTransactionLogger.writeEvent(eventAdd, storageInt, key, val)
-	w.WriteHeader(http.StatusCreated)
+	w.WriteHeader(http.StatusOK)
 }
 
 func intGetHandler(w http.ResponseWriter, req *http.Request) {
@@ -472,7 +500,7 @@ func intDeleteHandler(w http.ResponseWriter, req *http.Request) {
 		w.Header().Add("Deleted", "1")
 	}
 
-	w.WriteHeader(http.StatusNoContent)
+	w.WriteHeader(http.StatusOK)
 }
 
 func intIncrHandler(w http.ResponseWriter, req *http.Request) {
@@ -491,7 +519,7 @@ func intIncrHandler(w http.ResponseWriter, req *http.Request) {
 	contents := strconv.FormatInt(int64(cmd.result.(int)), 10)
 	w.Header().Add("Content-Type", "application/octet-stream")
 	w.Header().Add("Content-Length", fmt.Sprintf("%d", len(contents)))
-	w.WriteHeader(http.StatusCreated)
+	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(contents))
 }
 
@@ -522,7 +550,7 @@ func intIncrByHandler(w http.ResponseWriter, req *http.Request) {
 	contents := strconv.FormatInt(int64(cmd.result.(int)), 10)
 	w.Header().Add("Content-Type", "application/octet-stream")
 	w.Header().Add("Content-Length", fmt.Sprintf("%d", len(contents)))
-	w.WriteHeader(http.StatusCreated)
+	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(contents))
 }
 
@@ -563,7 +591,7 @@ func floatAddHandler(w http.ResponseWriter, req *http.Request) {
 	}
 	globalTransactionLogger.writeEvent(eventAdd, storageFloat, key, val)
 
-	w.WriteHeader(http.StatusCreated)
+	w.WriteHeader(http.StatusOK)
 }
 
 func floatDeleteHandler(w http.ResponseWriter, req *http.Request) {
@@ -580,7 +608,7 @@ func floatDeleteHandler(w http.ResponseWriter, req *http.Request) {
 	}
 	globalTransactionLogger.writeEvent(eventDel, storageFloat, key)
 
-	w.WriteHeader(http.StatusNoContent)
+	w.WriteHeader(http.StatusOK)
 }
 
 func uintAddHandler(w http.ResponseWriter, r *http.Request) {
@@ -607,7 +635,7 @@ func delKeyHandler(w http.ResponseWriter, req *http.Request) {
 			break
 		}
 	}
-	w.WriteHeader(http.StatusNoContent)
+	w.WriteHeader(http.StatusOK)
 }
 
 func echo(param string) string {
@@ -761,62 +789,33 @@ func initTransactionLogger(transactionLoggerFileName string) error {
 	}
 }
 
-type Settings struct {
-	Endpoint    string
-	CertPemFile string
-	KeyPemFile  string
-	Username    string
-	Password    string
-	// specify transaction logger type
-	// either a database, or a transaction log file
-	TransactionLogFile string
-}
-
-type RPCHandler struct {
-	method      string
-	funcName    string
-	handlerFunc func(w http.ResponseWriter, req *http.Request)
-}
-
-type KVSService struct {
-	*http.Server
-	settings    *Settings
-	wg          sync.WaitGroup
-	running     bool
-	rpcHandlers []*RPCHandler
-	// txnLogger TransactionLogger
-}
-
-// We can use deconde and encode to serialize the body of HTTP request
-// maybe method is not even necessary?
-func (s *KVSService) BindRPCHandler(method, funcName string, handlerFunc func(w http.ResponseWriter, req *http.Request)) {
+func (s *Service) BindRPCHandler(method, funcName string, callback HandlerCallback) {
 	if s.running {
 		log.Logger.Error("Failed to bind {%s} RPC, service is already running", funcName)
 		return
 	}
 
-	if handlerFunc == nil {
+	if callback == nil {
 		log.Logger.Error("Failed to bind {%s} RPC, handler cannot be nil", funcName)
 		return
 	}
 
 	s.rpcHandlers = append(
 		s.rpcHandlers,
-		&RPCHandler{method: method, funcName: funcName, handlerFunc: handlerFunc},
+		&RPCHandler{method: method, funcName: funcName, cb: callback},
 	)
 }
 
-func NewKVSService(settings *Settings) *KVSService {
+func NewService(settings *Settings) *Service {
 	initStorage()
 
-	// TODO: More robust error handling
 	if err := initTransactionLogger(settings.TransactionLogFile); err != nil {
 		log.Logger.Panic("Failed to initialize transaction logger %v", err)
 		os.Exit(1)
 	}
 
 	// https://stackoverflow.com/questions/39320025/how-to-stop-http-listenandserve
-	service := &KVSService{
+	service := &Service{
 		Server: &http.Server{
 			Addr: settings.Endpoint,
 		},
@@ -831,7 +830,7 @@ func NewKVSService(settings *Settings) *KVSService {
 	return service
 }
 
-func (s *KVSService) Run() {
+func (s *Service) Run() {
 	if s.running {
 		log.Logger.Error("Service is already running")
 		return
@@ -842,7 +841,7 @@ func (s *KVSService) Run() {
 
 	// Bind all rpc handlers
 	for _, hd := range s.rpcHandlers {
-		subrouter.Path("/" + hd.funcName).HandlerFunc(hd.handlerFunc).Methods(hd.method)
+		subrouter.Path("/" + hd.funcName).HandlerFunc(hd.cb).Methods(hd.method)
 	}
 
 	subrouter.Path("/mapadd/{key:[0-9A-Za-z_]+}").HandlerFunc(mapAddHandler).Methods("PUT")
@@ -876,17 +875,17 @@ func (s *KVSService) Run() {
 	s.Server.Handler = router
 	s.running = true
 
-	// subrouter.Path("/kill").HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-	// 	logOnEndpointHit(req.RequestURI, req.Method, req.RemoteAddr)
-	// 	log.Logger.Info("Killing the service")
+	subrouter.Path("/kill").HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		logOnEndpointHit(req.RequestURI, req.Method, req.RemoteAddr)
+		log.Logger.Info("Killing the service")
 
-	// 	ctx, cancel := context.WithTimeout(context.Background(), 3000*time.Millisecond)
-	// 	defer cancel()
-	// 	if err := s.Server.Shutdown(ctx); err != nil && err != context.DeadlineExceeded {
-	// 		log.Logger.Error("Server shutdown failed %v", err)
-	// 		return
-	// 	}
-	// }).Methods("POST")
+		ctx, cancel := context.WithTimeout(context.Background(), 3000*time.Millisecond)
+		defer cancel()
+		if err := s.Server.Shutdown(ctx); err != nil && err != context.DeadlineExceeded {
+			log.Logger.Error("Server shutdown failed %v", err)
+			return
+		}
+	}).Methods("POST")
 
 	// In case the server terminates, we want to make sure
 	// that we have written all the pending events to the transaction log file.
@@ -905,16 +904,18 @@ func (s *KVSService) Run() {
 		log.Logger.Error("Server terminated abnormally %v", err)
 		return
 	}
-	// s.wg.Wait()
 
+	// s.wg.Wait()
 	log.Logger.Info("Server was closed gracefully")
 }
 
-func (s *KVSService) Kill() {
+func (s *Service) Kill() {
 	if !s.running {
 		log.Logger.Error("Service is NOT running")
 		return
 	}
+
+	s.running = false
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3000*time.Millisecond)
 	defer cancel()
