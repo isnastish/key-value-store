@@ -2,6 +2,7 @@ package kvs
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -70,7 +71,8 @@ func TestMain(m *testing.M) {
 }
 
 func TestEcho(t *testing.T) {
-	settings := Settings{Endpoint: endpoint, RetryCount: 3}
+	// defer goleak.VerifyNone(t)
+	settings := Settings{Endpoint: endpoint, RetriesCount: 3}
 	client := NewClient(&settings)
 	res := client.Echo(context.Background(), "EcHo")
 	assert.True(t, res.Error() == nil)
@@ -78,7 +80,8 @@ func TestEcho(t *testing.T) {
 }
 
 func TestHello(t *testing.T) {
-	settings := Settings{Endpoint: endpoint, RetryCount: 3}
+	// defer goleak.VerifyNone(t)
+	settings := Settings{Endpoint: endpoint, RetriesCount: 3}
 	client := NewClient(&settings)
 	res := client.Hello(context.Background())
 	assert.True(t, res.Error() == nil)
@@ -87,9 +90,10 @@ func TestHello(t *testing.T) {
 }
 
 func TestFibo(t *testing.T) {
+	// defer goleak.VerifyNone(t)
 	// Fibo rpc is a great way of testing request cancelation with a context
 	// So, in the future I should use context.WithTimeout here
-	settings := Settings{Endpoint: endpoint, RetryCount: 3}
+	settings := Settings{Endpoint: endpoint, RetriesCount: 3}
 	client := NewClient(&settings)
 	// indices:       0  1  2  3  4  5  6  7   8   9
 	// fibo sequence: 0, 1, 1, 2, 3, 5, 8, 13, 21, 34
@@ -110,7 +114,8 @@ func TestFibo(t *testing.T) {
 }
 
 func TestIntRoundtrip(t *testing.T) {
-	settings := Settings{Endpoint: endpoint, RetryCount: 3}
+	// defer goleak.VerifyNone(t)
+	settings := Settings{Endpoint: endpoint, RetriesCount: 3}
 	client := NewClient(&settings)
 	ctx, cancel := context.WithTimeout(context.Background(), 20000*time.Millisecond)
 	defer cancel()
@@ -131,7 +136,8 @@ func TestIntRoundtrip(t *testing.T) {
 }
 
 func TestFloatRoundtrip(t *testing.T) {
-	settings := Settings{Endpoint: endpoint, RetryCount: 3}
+	// defer goleak.VerifyNone(t)
+	settings := Settings{Endpoint: endpoint, RetriesCount: 3}
 	client := NewClient(&settings)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -153,7 +159,8 @@ func TestFloatRoundtrip(t *testing.T) {
 }
 
 func TestStringRoundtrip(t *testing.T) {
-	settings := Settings{Endpoint: endpoint, RetryCount: 3}
+	// defer goleak.VerifyNone(t)
+	settings := Settings{Endpoint: endpoint, RetriesCount: 3}
 	client := NewClient(&settings)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -175,7 +182,8 @@ func TestStringRoundtrip(t *testing.T) {
 }
 
 func TestHashMapRoundtrip(t *testing.T) {
-	settings := Settings{Endpoint: endpoint, RetryCount: 3}
+	// defer goleak.VerifyNone(t)
+	settings := Settings{Endpoint: endpoint, RetriesCount: 3}
 	client := NewClient(&settings)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -197,7 +205,8 @@ func TestHashMapRoundtrip(t *testing.T) {
 }
 
 func TestIntIncr(t *testing.T) {
-	settings := Settings{Endpoint: endpoint, RetryCount: 3}
+	// defer goleak.VerifyNone(t)
+	settings := Settings{Endpoint: endpoint, RetriesCount: 3}
 	client := NewClient(&settings)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -221,7 +230,8 @@ func TestIntIncr(t *testing.T) {
 }
 
 func TestIntIncBy(t *testing.T) {
-	settings := Settings{Endpoint: endpoint, RetryCount: 3}
+	// defer goleak.VerifyNone(t)
+	settings := Settings{Endpoint: endpoint, RetriesCount: 3}
 	client := NewClient(&settings)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -237,20 +247,21 @@ func TestIntIncBy(t *testing.T) {
 }
 
 func TestRetries(t *testing.T) {
-	// TODO: If testing with goleaks enabled, there are some internal goroutines
-	// left on the stack
+	// NOTE: This test doesn't utilize the common docker container running the KVS service
+	// It uses a different concept, mock server, which is executed in a separate goroutine.
 	// defer goleak.VerifyNone(t)
-
 	handlerHitCount := 0
-
-	settings := Settings{Endpoint: "127.0.0.1:6060", RetryCount: 3}
+	settings := Settings{Endpoint: "127.0.0.1:6060", RetriesCount: 3}
 	server := testutil.NewMockServer(settings.Endpoint)
 	server.BindHandler("/echo", http.MethodPost, func(w http.ResponseWriter, req *http.Request) {
 		log.Logger.Info("Endpoint %s, method %s, remoteAddr %s", req.RequestURI, req.Method, req.RemoteAddr)
-		if handlerHitCount == (settings.RetryCount - 1) {
+		if handlerHitCount == (settings.RetriesCount - 1) {
 			bytes, _ := io.ReadAll(req.Body)
 			defer req.Body.Close()
 			res := echo(string(bytes))
+			log.Logger.Info(res)
+			w.Header().Add("Content-Length", fmt.Sprintf("%d", len(res)))
+			w.WriteHeader(http.StatusOK)
 			w.Write([]byte(res))
 			return
 		}
@@ -274,19 +285,19 @@ func TestRetries(t *testing.T) {
 
 func TestContextDeadlineOnRetries(t *testing.T) {
 	// defer goleak.VerifyNone(t)
-
-	settings := Settings{Endpoint: "127.0.0.1:6060", RetryCount: 5}
+	settings := Settings{Endpoint: "127.0.0.1:6060", RetriesCount: 5}
 	server := testutil.NewMockServer(settings.Endpoint)
 	server.BindHandler("/echo", http.MethodPost, func(w http.ResponseWriter, req *http.Request) {
+		// http://..../path?status=http.StatusTooEarly
 		log.Logger.Info("Endpoint %s, method %s, remoteAddr %s", req.RequestURI, req.Method, req.RemoteAddr)
-		w.WriteHeader(http.StatusTooManyRequests)
+		w.WriteHeader(http.StatusTooEarly)
 	})
 
 	server.Start()
 	defer server.Kill()
 
 	client := NewClient(&settings)
-	ctx, cancel := context.WithTimeout(context.Background(), 10000*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 5000*time.Millisecond)
 	defer cancel()
 
 	echoRes := client.Echo(ctx, "ECHO")

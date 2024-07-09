@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"time"
 	"unicode"
 
 	"github.com/gorilla/mux"
@@ -146,6 +147,8 @@ func (s *Service) mapGetHandler(w http.ResponseWriter, req *http.Request) {
 	}
 	s.writeTransaction(eventGet, storageTypeMap, key)
 
+	// NOTE: Maybe instead of transferring a stream of bytes, we could send the data
+	// for the map in a json format? The content-type would have to be changed to application/json
 	bytes, err := json.Marshal(cmd.result)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -555,7 +558,9 @@ func NewService(settings *ServiceSettings) *Service {
 	// https://stackoverflow.com/questions/39320025/how-to-stop-http-listenandserve
 	service := &Service{
 		Server: &http.Server{
-			Addr: settings.Endpoint,
+			Addr:         settings.Endpoint,
+			ReadTimeout:  5 * time.Second,
+			WriteTimeout: 5 * time.Second,
 		},
 		settings:    settings,
 		rpcHandlers: make([]*RPCHandler, 0),
@@ -602,6 +607,7 @@ func (s *Service) Run() {
 	}()
 
 	router := mux.NewRouter().StrictSlash(true)
+	// router.Path()
 	subrouter := router.PathPrefix(fmt.Sprintf("/%s/%s/", info.ServiceName(), info.ServiceVersion())).Subrouter()
 
 	// Bind all rpc handlers

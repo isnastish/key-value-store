@@ -44,8 +44,8 @@ const (
 
 	cmdEcho  = "echo"
 	cmdHello = "hello"
-	cmdKill  = "kill"
 	cmdFibo  = "fibo"
+	// cmdKill  = "kill" // NOTE: Kill command is not implemented yet
 )
 
 type IntCmdCallback func(c *Client, ctx context.Context, cmd *IntCmd) *IntCmd
@@ -55,10 +55,10 @@ type BoolCmdCallback func(c *Client, ctx context.Context, cmd *BoolCmd) *BoolCmd
 type F32CmdCallback func(c *Client, ctx context.Context, cmd *FloatCmd) *FloatCmd
 
 type Settings struct {
-	Endpoint    string
-	CertPemFile string
-	KeyPemFile  string
-	RetryCount  int
+	Endpoint     string
+	CertPemFile  string
+	KeyPemFile   string
+	RetriesCount int
 }
 
 type Client struct {
@@ -67,19 +67,20 @@ type Client struct {
 	baseURL  *url.URL
 }
 
-type cmdStatus struct {
+type httpStatus struct {
 	statusCode int
 	status     string
 	err        error
 }
-type baseCmd struct {
-	cmdStatus
-	args []interface{}
+
+type httpResult struct {
+	httpStatus
+	contents []byte
 }
 
-type Result struct {
-	cmdStatus
-	contents []byte
+type baseCmd struct {
+	httpStatus
+	args []interface{}
 }
 
 type MapCmd struct {
@@ -151,7 +152,7 @@ func init() {
 	cmdCallbacksTable.boolCbTable[cmdMapDel] = mapDelCommand
 	cmdCallbacksTable.boolCbTable[cmdF32Del] = f32DelCommand
 	// callback for killing the server
-	cmdCallbacksTable.boolCbTable[cmdKill] = killCommand
+	// cmdCallbacksTable.boolCbTable[cmdKill] = killCommand
 	// del a key from any type of storage
 	cmdCallbacksTable.boolCbTable[cmdDel] = delCommand
 
@@ -159,6 +160,7 @@ func init() {
 }
 
 func NewClient(settings *Settings) *Client {
+	// TODO: Change to https once we switch to TLS
 	baseURL, _ := url.Parse(fmt.Sprintf("http://%s/%s/%s/", settings.Endpoint, info.ServiceName(), info.ServiceVersion()))
 	return &Client{
 		settings: settings,
@@ -201,6 +203,12 @@ func (c *baseCmd) StatusCode() int {
 
 func (c *baseCmd) Args() []interface{} {
 	return c.args
+}
+
+func (c *baseCmd) setResponseInfo(statusCode int, status string, err error) {
+	c.statusCode = statusCode
+	c.status = status
+	c.err = err
 }
 
 func extendArgs(arr []interface{}, args ...interface{}) {
@@ -253,13 +261,13 @@ func (c *Client) Fibo(ctx context.Context, n int) *IntCmd {
 	return cmd
 }
 
-func (c *Client) Kill(ctx context.Context) *BoolCmd {
-	args := make([]interface{}, 1)
-	args[0] = cmdKill
-	cmd := newBoolCmd(args...)
-	cmdCallbacksTable.boolCbTable[cmdKill](c, ctx, cmd)
-	return cmd
-}
+// func (c *Client) Kill(ctx context.Context) *BoolCmd {
+// 	args := make([]interface{}, 1)
+// 	args[0] = cmdKill
+// 	cmd := newBoolCmd(args...)
+// 	cmdCallbacksTable.boolCbTable[cmdKill](c, ctx, cmd)
+// 	return cmd
+// }
 
 func (c *Client) Del(ctx context.Context, key string) *BoolCmd {
 	cmd := newBoolCmd(cmdDel, key)
@@ -382,180 +390,129 @@ func (c *Client) MapDel(ctx context.Context, key string) *BoolCmd {
 func echoCommand(client *Client, ctx context.Context, cmd *StrCmd) *StrCmd {
 	url := client.baseURL.JoinPath(cmd.args[0].(string))
 	val := cmd.args[1].(string)
-	res := performHttpRequest(client, ctx, http.MethodPost, url.String(), bytes.NewBufferString(val))
-	cmd.cmdStatus = res.cmdStatus
-	if cmd.err != nil {
+	r := client.httpRequest(ctx, http.MethodPost, url, bytes.NewBufferString(val), nil)
+	cmd.httpStatus = r.httpStatus
+	if r.err != nil {
 		return cmd
 	}
-	cmd.result = string(res.contents)
+	cmd.result = string(r.contents)
 	return cmd
 }
 
 func helloCommand(client *Client, ctx context.Context, cmd *StrCmd) *StrCmd {
 	url := client.baseURL.JoinPath(cmd.args[0].(string))
-	res := performHttpRequest(client, ctx, http.MethodPost, url.String(), nil)
-	cmd.cmdStatus = res.cmdStatus
-	if cmd.err != nil {
+	r := client.httpRequest(ctx, http.MethodPost, url, nil, nil)
+	cmd.httpStatus = r.httpStatus
+	if r.err != nil {
 		return cmd
 	}
-	cmd.result = string(res.contents)
+	cmd.result = string(r.contents)
 	return cmd
 }
 
 func fiboCommand(client *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
+	// NOTE: `n` is passed as a query string
+	// http://.../service-info/fibo?n=12 for example
 	url := client.baseURL.JoinPath(cmd.args[0].(string))
 	query := url.Query()
 	query.Add("n", strconv.Itoa(cmd.args[1].(int)))
 	url.RawQuery = query.Encode()
-	res := performHttpRequest(client, ctx, http.MethodPost, url.String(), nil)
-	cmd.cmdStatus = res.cmdStatus
-	if cmd.err != nil {
+	r := client.httpRequest(ctx, http.MethodPost, url, nil, nil)
+	cmd.httpStatus = r.httpStatus
+	if r.err != nil {
 		return cmd
 	}
-	val, _ := strconv.Atoi(string(res.contents))
-	cmd.result = val
+	cmd.result, _ = strconv.Atoi(string(r.contents))
 	return cmd
 }
 
-func killCommand(client *Client, ctx context.Context, cmd *BoolCmd) *BoolCmd {
-	url := client.baseURL.JoinPath(cmd.args[0].(string))
-	res := performHttpRequest(client, ctx, http.MethodPost, url.String(), nil)
-	cmd.cmdStatus = res.cmdStatus
-	return cmd
-}
+// func killCommand(client *Client, ctx context.Context, cmd *BoolCmd) *BoolCmd {
+// 	url := client.baseURL.JoinPath(cmd.args[0].(string))
+// 	res := performHttpRequest(client, ctx, http.MethodPost, url.String(), nil)
+// 	cmd.cmdStatus = res.cmdStatus
+// 	return cmd
+// }
 
 func delCommand(client *Client, ctx context.Context, cmd *BoolCmd) *BoolCmd {
 	url := client.baseURL.JoinPath(cmd.args[0].(string)).JoinPath(cmd.args[1].(string))
-	res := performHttpRequest(client, ctx, http.MethodDelete, url.String(), nil)
-	cmd.cmdStatus = res.cmdStatus
-	if cmd.err != nil {
-		return cmd
-	}
-	if res.contents != nil {
-		cmd.result = true
-	}
+	r := client.httpRequest(ctx, http.MethodDelete, url, nil, nil)
+	_ = postDelCommand(r, cmd)
 	return cmd
 }
 
 func strGetCommand(client *Client, ctx context.Context, cmd *StrCmd) *StrCmd {
 	url := client.baseURL.JoinPath(cmd.args[0].(string)).JoinPath(cmd.args[1].(string))
-	res := performHttpRequest(client, ctx, http.MethodGet, url.String(), nil)
-	cmd.cmdStatus = res.cmdStatus
-	if res.err != nil {
+	r := client.httpRequest(ctx, http.MethodGet, url, nil, nil)
+	cmd.httpStatus = r.httpStatus
+	if r.err != nil {
 		return cmd
 	}
-	cmd.result = string(res.contents)
+	cmd.result = string(r.contents)
 	return cmd
 }
 
 func strAddCommand(client *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
 	url := client.baseURL.JoinPath(cmd.args[0].(string)).JoinPath(cmd.args[1].(string))
 	val := cmd.args[2].(string)
-	res := performHttpRequest(client, ctx, http.MethodPut, url.String(), bytes.NewBufferString(val))
-	cmd.cmdStatus = res.cmdStatus
-	if res.err != nil {
-		return cmd
-	}
-	// I cannot think of anything else rather than putting a status
-	// from a PUT operation into a result itself.
-	cmd.result = res.statusCode
+	r := client.httpRequest(ctx, http.MethodPut, url, bytes.NewBufferString(val), nil)
+	_ = postAddCommand(r, cmd)
 	return cmd
 }
 
 func strDelCommand(client *Client, ctx context.Context, cmd *BoolCmd) *BoolCmd {
 	url := client.baseURL.JoinPath(cmd.args[0].(string)).JoinPath(cmd.args[1].(string))
-	res := performHttpRequest(client, ctx, http.MethodDelete, url.String(), nil)
-	cmd.cmdStatus = res.cmdStatus
-	if res.err != nil {
-		return cmd
-	}
-	// If result's contents is not empty the value was deleted, so we set result to true,
-	// false otherwise if DELETE had no effect.
-	if res.contents != nil {
-		cmd.result = true
-	}
+	r := client.httpRequest(ctx, http.MethodDelete, url, nil, nil)
+	_ = postDelCommand(r, cmd)
 	return cmd
 }
 
 func intGetCommand(client *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
 	url := client.baseURL.JoinPath(cmd.args[0].(string)).JoinPath(cmd.args[1].(string))
-	res := performHttpRequest(client, ctx, http.MethodGet, url.String(), nil)
-	cmd.cmdStatus = res.cmdStatus
-	if res.err != nil {
-		return cmd
-	}
-	cmd.result, _ = strconv.Atoi(string(res.contents))
+	r := client.httpRequest(ctx, http.MethodGet, url, nil, nil)
+	_ = postIntGetCommand(r, cmd)
 	return cmd
 }
 
 func intAddCommand(client *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
 	url := client.baseURL.JoinPath(cmd.args[0].(string)).JoinPath(cmd.args[1].(string))
 	val := fmt.Sprintf("%d", cmd.args[2].(int))
-	res := performHttpRequest(client, ctx, http.MethodPut, url.String(), bytes.NewBufferString(val))
-	cmd.cmdStatus = res.cmdStatus
+	r := client.httpRequest(ctx, http.MethodPut, url, bytes.NewBufferString(val), nil)
+	cmd.httpStatus = r.httpStatus
 	return cmd
 }
 
 func intDelCommand(client *Client, ctx context.Context, cmd *BoolCmd) *BoolCmd {
 	url := client.baseURL.JoinPath(cmd.args[0].(string)).JoinPath(cmd.args[1].(string))
-	res := performHttpRequest(client, ctx, http.MethodDelete, url.String(), nil)
-	cmd.cmdStatus = res.cmdStatus
-	if res.err != nil {
-		return cmd
-	}
-	// If the contents is not empty, the value was present before deletion,
-	// and was successfully removed. If it's empty, then the value was't present and the deletion operatation had no effect.
-	if res.contents != nil {
-		cmd.result = true
-	}
+	r := client.httpRequest(ctx, http.MethodDelete, url, nil, nil)
+	_ = postDelCommand(r, cmd)
 	return cmd
 }
 
 func intIncrCommand(client *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
 	url := client.baseURL.JoinPath(cmd.args[0].(string)).JoinPath(cmd.args[1].(string))
-	res := performHttpRequest(client, ctx, http.MethodPut, url.String(), nil)
-	cmd.cmdStatus = res.cmdStatus
-	if res.err != nil {
-		cmd.err = res.err
-		return cmd
-	}
-	val, err := strconv.ParseInt(string(res.contents), 0, 32)
-	if err != nil {
-		cmd.err = res.err
-		return cmd
-	}
-	cmd.result = int(val)
+	r := client.httpRequest(ctx, http.MethodPut, url, nil, nil)
+	_ = postIntGetCommand(r, cmd)
 	return cmd
 }
 
 func intIncrByCommand(client *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
 	url := client.baseURL.JoinPath(cmd.args[0].(string)).JoinPath(cmd.args[1].(string))
 	val := strconv.FormatInt(int64(cmd.args[2].(int)), 10)
-	res := performHttpRequest(client, ctx, http.MethodPut, url.String(), bytes.NewBufferString(val))
-	cmd.cmdStatus = res.cmdStatus
-	if res.err != nil {
-		cmd.err = res.err
-		return cmd
-	}
-	resVal, err := strconv.ParseInt(string(res.contents), 0, 32)
-	if err != nil {
-		cmd.err = res.err
-		return cmd
-	}
-	cmd.result = int(resVal)
+	r := client.httpRequest(ctx, http.MethodPut, url, bytes.NewBufferString(val), nil)
+	_ = postIntGetCommand(r, cmd)
 	return cmd
 }
 
 func f32GetCommand(client *Client, ctx context.Context, cmd *FloatCmd) *FloatCmd {
 	url := client.baseURL.JoinPath(cmd.args[0].(string)).JoinPath(cmd.args[1].(string))
-	res := performHttpRequest(client, ctx, http.MethodGet, url.String(), nil)
-	cmd.cmdStatus = res.cmdStatus
-	if res.err != nil {
+	r := client.httpRequest(ctx, http.MethodGet, url, nil, nil)
+	cmd.httpStatus = r.httpStatus
+	if r.err != nil {
 		return cmd
 	}
 	// We have to be careful with the precision here,
 	// because some of the tests might fail.
-	val, _ := strconv.ParseFloat(string(res.contents), 32)
+	val, _ := strconv.ParseFloat(string(r.contents), 32)
 	cmd.result = float32(val)
 	return cmd
 }
@@ -563,38 +520,31 @@ func f32GetCommand(client *Client, ctx context.Context, cmd *FloatCmd) *FloatCmd
 func f32AddCommand(client *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
 	url := client.baseURL.JoinPath(cmd.args[0].(string)).JoinPath(cmd.args[1].(string))
 	val := fmt.Sprintf("%e", cmd.args[2].(float32))
-	res := performHttpRequest(client, ctx, http.MethodPut, url.String(), bytes.NewBufferString(val))
-	cmd.cmdStatus = res.cmdStatus
-	if res.err != nil {
-		return cmd
-	}
-	// Again, put the status code as a result of an operation
-	cmd.result = res.statusCode
+	r := client.httpRequest(ctx, http.MethodPut, url, bytes.NewBufferString(val), nil)
+	_ = postAddCommand(r, cmd)
 	return cmd
 }
 
 func f32DelCommand(client *Client, ctx context.Context, cmd *BoolCmd) *BoolCmd {
 	url := client.baseURL.JoinPath(cmd.args[0].(string)).JoinPath(cmd.args[1].(string))
-	res := performHttpRequest(client, ctx, http.MethodDelete, url.String(), nil)
-	cmd.cmdStatus = res.cmdStatus
-	if res.err != nil {
-		return cmd
-	}
-	if res.contents != nil {
-		cmd.result = true
-	}
+	r := client.httpRequest(ctx, http.MethodDelete, url, nil, nil)
+	_ = postDelCommand(r, cmd)
 	return cmd
 }
 
 func mapGetCommand(client *Client, ctx context.Context, cmd *MapCmd) *MapCmd {
 	url := client.baseURL.JoinPath(cmd.args[0].(string)).JoinPath(cmd.args[1].(string))
-	res := performHttpRequest(client, ctx, http.MethodGet, url.String(), nil)
-	cmd.cmdStatus = res.cmdStatus
-	if res.err != nil {
+	r := client.httpRequest(ctx, http.MethodGet, url, nil, nil)
+	cmd.httpStatus = r.httpStatus
+	if r.err != nil {
 		return cmd
 	}
 	val := make(map[string]string)
-	json.Unmarshal(res.contents, &val)
+	err := json.Unmarshal(r.contents, &val)
+	if err != nil {
+		cmd.err = err
+		return cmd
+	}
 	cmd.result = val
 	return cmd
 }
@@ -603,25 +553,53 @@ func mapAddCommand(client *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
 	url := client.baseURL.JoinPath(cmd.args[0].(string)).JoinPath(cmd.args[1].(string))
 	hashmap := cmd.args[2].(map[string]string)
 	val, _ := json.Marshal(hashmap)
-	res := performHttpRequest(client, ctx, http.MethodPut, url.String(), bytes.NewBuffer(val))
-	cmd.cmdStatus = res.cmdStatus
-	if res.err != nil {
-		return cmd
-	}
-	cmd.result = res.statusCode
+	r := client.httpRequest(ctx, http.MethodPut, url, bytes.NewBuffer(val), nil)
+	_ = postAddCommand(r, cmd)
 	return cmd
 }
 
 func mapDelCommand(client *Client, ctx context.Context, cmd *BoolCmd) *BoolCmd {
 	url := client.baseURL.JoinPath(cmd.args[0].(string)).JoinPath(cmd.args[1].(string))
-	res := performHttpRequest(client, ctx, http.MethodDelete, url.String(), nil)
-	cmd.cmdStatus = res.cmdStatus
-	if res.err != nil {
+	r := client.httpRequest(ctx, http.MethodDelete, url, nil, nil)
+	_ = postDelCommand(r, cmd)
+	return cmd
+}
+
+func postDelCommand(r *httpResult, cmd *BoolCmd) *BoolCmd {
+	cmd.httpStatus = r.httpStatus
+	if r.err != nil {
 		return cmd
 	}
-	if res.contents != nil {
+	// NOTE: If the contents doesn't equal to nil, the key was deleted,
+	// otherwise it didn't exist in the storage
+	if r.contents != nil {
 		cmd.result = true
 	}
+	return cmd
+}
+
+func postAddCommand(r *httpResult, cmd *IntCmd) *IntCmd {
+	cmd.httpStatus = r.httpStatus
+	if r.err != nil {
+		return cmd
+	}
+	// NOTE: Assign the status code to the result
+	cmd.result = r.statusCode
+	return cmd
+}
+
+// TODO: Make it possible to pass the base
+func postIntGetCommand(r *httpResult, cmd *IntCmd) *IntCmd {
+	cmd.httpStatus = r.httpStatus
+	if r.err != nil {
+		return cmd
+	}
+	val, err := strconv.ParseInt(string(r.contents), 0, 32)
+	if err != nil {
+		cmd.err = err
+		return cmd
+	}
+	cmd.result = int(val)
 	return cmd
 }
 
@@ -634,139 +612,90 @@ func oneOf[T string | int](src T, rest ...T) bool {
 	return false
 }
 
-type cancellableTimer struct {
-	cancelCh chan bool
+var retryStatusCodes = []int{
+	http.StatusBadGateway,
+	http.StatusTooManyRequests,
+	http.StatusTooEarly,
+	http.StatusGatewayTimeout,
+	http.StatusRequestTimeout,
+	http.StatusServiceUnavailable,
 }
 
-func newCancellableTimer() *cancellableTimer {
-	return &cancellableTimer{
-		cancelCh: make(chan bool),
-	}
-}
+type _Effector func(context context.Context) (*http.Response, error)
 
-func (t *cancellableTimer) waitWithCancel(duration time.Duration, result chan<- bool) {
-	select {
-	case <-time.After(duration):
-		result <- true
-	case <-t.cancelCh:
-		result <- false
-	}
-}
+func retry(effector _Effector, retriesMaxCount int, delay time.Duration) _Effector {
+	return func(ctx context.Context) (*http.Response, error) {
+		for r := 0; ; r++ {
 
-func (t *cancellableTimer) cancel() {
-	close(t.cancelCh)
-}
+			response, err := effector(ctx)
+			if (err == nil && !oneOf(response.StatusCode, retryStatusCodes...)) || r >= retriesMaxCount {
+				return response, err
+			}
 
-func doRequestWithRetry(client *Client, ctx context.Context, retriesCount int, duration time.Duration, req *http.Request) (*http.Response, error) {
-	ctimer := newCancellableTimer()
-	responseCh := make(chan *http.Response, 1)
-	errorCh := make(chan error, 1)
-
-	go func() {
-		for retries := 0; retries < retriesCount; retries++ {
-			// NOTE: If the service crashed while making the request,
-			// Do procedure will block until we hit context's deadline (if one is provided).
-			resp, err := client.Do(req)
 			if err != nil {
-				errorCh <- err
-				return
+				log.Logger.Error("Error occured while retrying %v", err)
 			}
 
-			if oneOf[int](resp.StatusCode,
-				http.StatusBadGateway,
-				http.StatusTooManyRequests,
-				http.StatusTooEarly,
-				http.StatusGatewayTimeout,
-				http.StatusRequestTimeout,
-				http.StatusServiceUnavailable) {
+			log.Logger.Info("Attempt %d failed; retrying in %v", r+1, delay)
 
-				log.Logger.Info("Attempt %d failed with status %s, retrying in %v",
-					retries+1, resp.Status, duration,
-				)
-
-			} else {
-				responseCh <- resp
-				return
-			}
-
-			// We cancel the timer when context deadline signal is received.
-			resultCh := make(chan bool)
-			go ctimer.waitWithCancel(duration, resultCh)
-			if res := <-resultCh; !res {
-				return
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				log.Logger.Info("Context deadline exceeded")
+				return nil, ctx.Err()
 			}
 		}
-
-		errorCh <- errors.New("Retries limit exceeded")
-	}()
-
-	select {
-	case err := <-errorCh:
-		return nil, err
-	case resp := <-responseCh:
-		return resp, nil
-	case <-ctx.Done():
-		ctimer.cancel()
-		return nil, ctx.Err()
 	}
 }
 
-// https://stackoverflow.com/questions/65950011/what-is-the-best-practice-when-using-with-context-withtimeout-in-go
-// TODO: Handle an error when a server hasn't started yet.
-// Because closing the response body will most likely block.
-func performHttpRequest(client *Client, ctx context.Context, httpMethod string, url string, body io.Reader) *Result {
-	var req *http.Request
-	var err error
-	var result = &Result{}
-	var stream []byte
+func (c *Client) httpRequest(ctx context.Context, httpMethod string, url *url.URL, body io.Reader, headers *map[string]string) *httpResult {
+	result := &httpResult{}
 
-	req, err = http.NewRequestWithContext(ctx, httpMethod, url, body)
-	if err != nil {
-		result.err = err
-		return result
-	}
-
-	if httpMethod == http.MethodPut && body != nil {
+	req, err := http.NewRequestWithContext(ctx, httpMethod, url.String(), body)
+	if body != nil {
 		switch t := body.(type) {
 		case *bytes.Buffer:
-			req.Header.Add("Content-Length", fmt.Sprintf("%d", t.Len()))
-			req.Header.Add("Content-Type", "application/octet-stream")
-		}
+			log.Logger.Info("Setting request headers, body: %s", t.String())
+
+			req.Header.Add("content-type", "application/octet-stream")
+			req.Header.Add("content-length", fmt.Sprintf("%d", t.Len()))
+		} // TODO: Handle unknown type?
 	}
 
-	req.Header.Add("User-Agent", "kvs-client")
+	effector := func(ctx context.Context) (*http.Response, error) {
+		if headers != nil {
+			for key, value := range *headers {
+				req.Header.Add(key, value)
+			}
+		}
 
-	resp, err := doRequestWithRetry(client, ctx, client.settings.RetryCount, 2000*time.Millisecond, req)
+		if err != nil {
+			return nil, err
+		}
+
+		// The request Body, if non-nil, will be closed by the underlying Transport, even on errors.
+		// The Body may be closed asynchronously after Do returns.
+		return c.Do(req)
+	}
+
+	closure := retry(effector, c.settings.RetriesCount, 2000*time.Millisecond)
+	r, err := closure(ctx)
 	if err != nil {
 		result.err = err
 		return result
 	}
+	defer r.Body.Close()
 
-	defer resp.Body.Close()
+	result.status = r.Status
+	result.statusCode = r.StatusCode
 
-	result.status = resp.Status
-	result.statusCode = resp.StatusCode
-
-	if resp.StatusCode != http.StatusOK {
-		// If the response status doesn't equal to 200, the body will contain an error message
-		// prescribed by the service.
-		stream, _ = io.ReadAll(resp.Body)
-		result.err = errors.New(string(stream))
+	data, _ := io.ReadAll(r.Body)
+	if !oneOf[int](r.StatusCode, http.StatusOK, http.StatusCreated, http.StatusAccepted) {
+		// NOTE: If the response status doesn't equal to 200, 201 or 202, the body will contain an error message
+		result.err = errors.New(string(data))
 		return result
 	}
 
-	if oneOf[string](httpMethod, http.MethodGet, http.MethodPost, http.MethodPut) {
-		stream, _ = io.ReadAll(resp.Body)
-		result.contents = stream
-		return result
-	}
-
-	// On a successfull DELETE request, the response MAY contain a Deleted header,
-	// which is used to identify whether a resource was deleted or not.
-	if httpMethod == http.MethodDelete {
-		result.contents = []byte(resp.Header.Get("Deleted"))
-		return result
-	}
-
+	result.contents = data
 	return result
 }
