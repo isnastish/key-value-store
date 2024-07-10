@@ -1,9 +1,8 @@
-package testutil
+package testsetup
 
 import (
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"os/exec"
 	"strings"
@@ -90,72 +89,21 @@ func doesKVSDockerImageExist() (bool, error) {
 	return exists, nil
 }
 
-// TODO: Accept the port
 func StartKVSServiceContainer() (bool, error) {
-	kill := false
-
+	tearDown := false
 	exists, err := doesKVSDockerImageExist()
 	if err != nil {
-		return kill, err
+		return tearDown, err
 	}
 
 	if !exists {
 		log.Logger.Fatal("Image %s doesn't exist", kvsServiceImage)
 	}
 
-	cmd := exec.Command("docker", "run", "--rm", "--publish", "8080:8080", "--name", "kvs-service", kvsServiceImage)
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return kill, err
-	}
-	defer stdout.Close()
-
-	if err := cmd.Start(); err != nil {
-		return kill, err
-	}
-
-	kill = true // kill the container running the kvs-service
-
-	// Wait at maximum three minutes for the container to boot up
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer cancel()
-
-	var strBuilder strings.Builder
-
-	readBuf := make([]byte, 256)
-	for {
-		select {
-		case <-ctx.Done():
-			return kill, ctx.Err()
-		default:
-		}
-
-		n, err := stdout.Read(readBuf[:])
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			log.Logger.Fatal("reached end of stdout %v", err)
-		}
-		if n > 0 {
-			outStr := string(readBuf[:n])
-			log.Logger.Info(outStr)
-			strBuilder.WriteString(outStr)
-			if strings.Contains(strBuilder.String(), "service is running") {
-				time.Sleep(500 * time.Millisecond)
-				break
-			}
-		}
-	}
-	return kill, nil
+	expectedOutput := "service is running"
+	return startDockerContainer(expectedOutput, "docker", "run", "--rm", "--publish", "8080:8080" /*host:container*/, "--name", "kvs-service", kvsServiceImage)
 }
 
 func KillKVSServiceContainer() {
-	log.Logger.Info("Killing docker container")
-	cmd := exec.Command("docker", "rm", "--force", "kvs-service")
-	if err := cmd.Run(); err != nil {
-		log.Logger.Error("Failed to kill kvs-service container")
-		return
-	}
-	log.Logger.Info("Killed kvs-service container")
+	killDockerContainer("docker", "rm", "--force", "kvs-service")
 }

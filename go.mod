@@ -5,6 +5,7 @@ go 1.22.3
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/gorilla/mux v1.8.1 // indirect
+	github.com/lib/pq v1.10.9 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.19 // indirect
 	github.com/niemeyer/golang v0.0.0-20110826170342-f8c0f811cb19 // indirect

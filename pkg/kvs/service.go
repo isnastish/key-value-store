@@ -538,18 +538,24 @@ func (s *Service) writeTransaction(evenType EventType, storageType StorageType, 
 }
 
 func NewService(settings *ServiceSettings) *Service {
-	var txnLogger TansactionLogger
+	var logger TansactionLogger
 	var err error
 
 	switch settings.TxnLoggerType {
 	case TxnLoggerTypeFile:
-		txnLogger, err = newFileTransactionsLogger(settings.TxnFilePath)
+		logger, err = newFileTransactionsLogger(settings.TxnFilePath)
 		if err != nil {
 			log.Logger.Fatal("Failed to init file transaction logger %v", err)
 		}
 
 	case TxnLoggerTypeDB:
-		txnLogger, err = newDBTransactionLogger()
+		logger, err = newDBTransactionLogger(PostgresSettings{
+			host:     "localhost",
+			port:     5432,
+			dbName:   "postgres",
+			userName: "postgres",
+			userPwd:  "12345",
+		})
 		if err != nil {
 			log.Logger.Fatal("Failed to init DB transaction logger %v", err)
 		}
@@ -565,7 +571,7 @@ func NewService(settings *ServiceSettings) *Service {
 		settings:    settings,
 		rpcHandlers: make([]*RPCHandler, 0),
 		storage:     make(map[StorageType]Storage),
-		txnLogger:   txnLogger,
+		txnLogger:   logger,
 	}
 
 	service.storage[storageTypeInt] = newIntStorage()

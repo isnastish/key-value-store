@@ -116,6 +116,15 @@ type CmdTable struct {
 	boolCbTable map[string]BoolCmdCallback
 }
 
+type Batch struct {
+	queue []string // string pairs
+	// key-value queue
+}
+
+func (b *Batch) Exec() {
+	// make an actual http request here
+}
+
 var cmdCallbacksTable *CmdTable
 
 func newCmdGroup() *CmdTable {
@@ -417,6 +426,7 @@ func fiboCommand(client *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
 	query := url.Query()
 	query.Add("n", strconv.Itoa(cmd.args[1].(int)))
 	url.RawQuery = query.Encode()
+	log.Logger.Info("Query URL: %s", url.String())
 	r := client.httpRequest(ctx, http.MethodPost, url, nil, nil)
 	cmd.httpStatus = r.httpStatus
 	if r.err != nil {

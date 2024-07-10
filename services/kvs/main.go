@@ -31,6 +31,9 @@ func main() {
 		log.Logger.Fatal("Invalid TransactionLogger type %s", *txnLoggerType)
 	}
 
+	// NOTE: Use postgres database for transaction logging for now
+	settings.TxnLoggerType = kvs.TxnLoggerTypeDB
+
 	service := kvs.NewService(&settings)
 	service.Run()
 }
