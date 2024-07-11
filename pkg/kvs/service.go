@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
-	"sync"
 	"time"
 	"unicode"
 
@@ -51,7 +50,7 @@ type Service struct {
 	settings    *ServiceSettings
 	rpcHandlers []*RPCHandler
 	storage     map[StorageType]Storage
-	txnLogger   TansactionLogger
+	logger      TansactionLogger
 	running     bool
 }
 
@@ -482,7 +481,7 @@ func (s *Service) processSavedTransactions() error {
 	var err error
 	var event Event
 
-	events, errors := s.txnLogger.readEvents()
+	events, errors := s.logger.ReadEvents()
 
 	for {
 		select {
@@ -574,7 +573,7 @@ func NewService(settings *ServiceSettings) *Service {
 		settings:    settings,
 		rpcHandlers: make([]*RPCHandler, 0),
 		storage:     make(map[StorageType]Storage),
-		txnLogger:   logger,
+		logger:      logger,
 	}
 
 	service.storage[storageTypeInt] = newIntStorage()
@@ -603,15 +602,13 @@ func (s *Service) Run() {
 	s.running = true
 
 	shutdownCtx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	wg := sync.WaitGroup{}
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		s.txnLogger.processTransactions(shutdownCtx)
+	defer func() {
+		cancel()
+		s.logger.WaitForPendingTransactions()
 	}()
+
+	// This goroutine won't be leaked
+	go s.logger.ProcessTransactions(shutdownCtx)
 
 	router := mux.NewRouter().StrictSlash(true)
 	// router.Path()
@@ -655,8 +652,4 @@ func (s *Service) Run() {
 	} else {
 		log.Logger.Info("Server was closed gracefully")
 	}
-
-	// Put both these fucns into a defer statement
-	cancel()
-	wg.Wait()
 }

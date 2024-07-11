@@ -17,7 +17,8 @@ const (
 )
 
 type TansactionLogger interface {
-	writeTransaction(evenType EventType, storageType StorageType, key string, value interface{})
-	processTransactions(ctx context.Context)
-	readEvents() (<-chan Event, <-chan error)
+	WriteTransaction(evenType EventType, storageType StorageType, key string, value interface{})
+	ProcessTransactions(ctx context.Context)
+	ReadEvents() (<-chan Event, <-chan error)
+	WaitForPendingTransactions()
 }

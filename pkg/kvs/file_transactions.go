@@ -45,7 +45,11 @@ func newFileTransactionsLogger(filePath string) (*FileTransactionLogger, error) 
 	}, nil
 }
 
-func (l *FileTransactionLogger) writeTransaction(eventType EventType, storageType StorageType, key string, value interface{}) {
+func (l *FileTransactionLogger) WaitForPendingTransactions() {
+
+}
+
+func (l *FileTransactionLogger) WriteTransaction(eventType EventType, storageType StorageType, key string, value interface{}) {
 	l.events <- Event{
 		Type:        eventType,
 		StorageType: storageType,
@@ -54,7 +58,7 @@ func (l *FileTransactionLogger) writeTransaction(eventType EventType, storageTyp
 		Timestamp:   time.Now()}
 }
 
-func (l *FileTransactionLogger) processTransactions(shutdownContext context.Context) {
+func (l *FileTransactionLogger) ProcessTransactions(shutdownContext context.Context) {
 	defer l.file.Close()
 
 	events := make(chan Event, 16)
@@ -108,7 +112,7 @@ func (l *FileTransactionLogger) processTransactions(shutdownContext context.Cont
 	}
 }
 
-func (l *FileTransactionLogger) readEvents() (<-chan Event, <-chan error) {
+func (l *FileTransactionLogger) ReadEvents() (<-chan Event, <-chan error) {
 	events := make(chan Event)
 	errors := make(chan error, 1)
 

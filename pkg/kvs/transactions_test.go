@@ -3,6 +3,7 @@ package kvs
 import (
 	"context"
 	"os"
+	"strconv"
 	"testing"
 	"time"
 
@@ -34,11 +35,12 @@ func TestMain(m *testing.M) {
 	exitCode = m.Run()
 }
 
-// This function will wait for pending transactions to complete
-// We can pass a context to processTransactions()
-// logger.WaitForPendingTransactions()
-// {
-// }
+func populatePostgresWithTransactions(logger *PostgresTransactionLogger) {
+	for i := 0; i < 10; i++ {
+		key := "_entry_" + strconv.Itoa(i)
+		logger.WriteTransaction(eventAdd, storageTypeInt, key, (i+1)<<2)
+	}
+}
 
 func TestInitPostgresTransactionLogger(t *testing.T) {
 	defer goleak.VerifyNone(t)
@@ -53,50 +55,29 @@ func TestInitPostgresTransactionLogger(t *testing.T) {
 	assert.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
-
-	loggerDone := make(chan bool, 1)
-	go func() {
-		logger.processTransactions(ctx)
-		close(loggerDone)
+	defer func() {
+		cancel()
+		logger.WaitForPendingTransactions()
 	}()
+
+	go logger.ProcessTransactions(ctx)
+
 	time.Sleep(200 * time.Millisecond)
 
-	logger.writeTransaction(eventAdd, storageTypeInt, "n", 12)
-	logger.writeTransaction(eventGet, storageTypeInt, "n", nil)
+	populatePostgresWithTransactions(logger)
 
 	// Wait a bit until the transaction will be added into a database
-	time.Sleep(400 * time.Millisecond)
+	time.Sleep(2 * time.Second)
 
-	// TODO: Use the API of the transaction logger instead
-	// logger.readEvents()
+	eventList := []Event{}
 
-	queryCtx, queryCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer queryCancel()
-
-	query := `SELECT event_type, key, value FROM integers_table;`
-	rows, err := logger.db.QueryContext(queryCtx, query)
-	if err != nil {
-		t.Error(err)
-	}
-	defer rows.Close()
-
-	var eventTypeStr string
-	var hashKey string
-	var value int
-
-	for rows.Next() {
-		if err := rows.Scan(&eventTypeStr, &hashKey, &value); err != nil {
+	events, errors := logger.ReadEvents()
+	for {
+		select {
+		case event := <-events:
+			eventList = append(eventList, event)
+		case err := <-errors:
 			t.Error(err)
 		}
-		// assert.Equal(t, eventAdd, strToEvent[eventTypeStr])
-		// assert.Equal(t, "n", hashKey)
-		// assert.Equal(t, 12, value)
 	}
-
-	if rows.Err() != nil {
-		t.Error(err)
-	}
-
-	cancel()
-	<-loggerDone
 }
