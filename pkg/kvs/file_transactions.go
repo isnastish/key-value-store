@@ -45,17 +45,12 @@ func newFileTransactionsLogger(filePath string) (*FileTransactionLogger, error) 
 	}, nil
 }
 
-func (l *FileTransactionLogger) writeTransaction(eventType EventType, storageType StorageType, key string, values ...interface{}) {
-	// NOTE: Intentionally not specifying id, since it will be accessed by multiple goroutines
-	// var val interface{}
-	// if len(values) > 0 {
-	// 	val = values[0]
-	// }
+func (l *FileTransactionLogger) writeTransaction(eventType EventType, storageType StorageType, key string, value interface{}) {
 	l.events <- Event{
 		Type:        eventType,
-		StorageType: storageType, // DELETE operation doesn't expect any values as well as GET
+		StorageType: storageType,
 		Key:         key,
-		Val:         values,
+		Val:         value,
 		Timestamp:   time.Now()}
 }
 

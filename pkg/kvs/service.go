@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"sync"
 	"time"
 	"unicode"
 
@@ -20,6 +21,9 @@ import (
 // TODO: Implement a throttle pattern on the server side.
 // We should limit the amount of requests a client can make to a service
 // to 10 requests per second.
+
+// NOTE: Instead of passing nil when making GET/DELETE transactions, introduce separate functions
+// writeGetTransaction(), writeDeleteTransaction() and only pass the information, (key and a storageType)
 
 type ServiceSettings struct {
 	Endpoint    string
@@ -82,7 +86,7 @@ func (s *Service) stringGetHandler(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	s.writeTransaction(eventGet, storageTypeString, key)
+	s.writeTransaction(eventGet, storageTypeString, key, nil)
 
 	bytes := []byte(cmd.result.(string))
 	w.Header().Add("Content-Type", "text/plain")
@@ -102,7 +106,7 @@ func (s *Service) stringDeleteHandler(w http.ResponseWriter, req *http.Request) 
 		return
 	}
 
-	s.writeTransaction(eventDel, storageTypeString, key)
+	s.writeTransaction(eventDel, storageTypeString, key, nil)
 
 	if cmd.deleted {
 		w.Header().Add("Deleted", "1")
@@ -145,7 +149,7 @@ func (s *Service) mapGetHandler(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, cmd.err.Error(), http.StatusNotFound)
 		return
 	}
-	s.writeTransaction(eventGet, storageTypeMap, key)
+	s.writeTransaction(eventGet, storageTypeMap, key, nil)
 
 	// NOTE: Maybe instead of transferring a stream of bytes, we could send the data
 	// for the map in a json format? The content-type would have to be changed to application/json
@@ -171,7 +175,7 @@ func (s *Service) mapDeleteHandler(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, cmd.err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.writeTransaction(eventDel, storageTypeMap, key)
+	s.writeTransaction(eventDel, storageTypeMap, key, nil)
 
 	if cmd.deleted {
 		w.Header().Add("Deleted", "1")
@@ -212,7 +216,7 @@ func (s *Service) intGetHandler(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, cmd.err.Error(), http.StatusNotFound)
 		return
 	}
-	s.writeTransaction(eventGet, storageTypeInt, key)
+	s.writeTransaction(eventGet, storageTypeInt, key, nil)
 
 	w.Header().Add("Conent-Type", "text/plain")
 	w.WriteHeader(http.StatusOK)
@@ -228,7 +232,7 @@ func (s *Service) intDeleteHandler(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, cmd.err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.writeTransaction(eventDel, storageTypeInt, key)
+	s.writeTransaction(eventDel, storageTypeInt, key, nil)
 
 	if cmd.deleted {
 		w.Header().Add("Deleted", "1")
@@ -246,7 +250,7 @@ func (s *Service) intIncrHandler(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, cmd.err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.writeTransaction(eventIncr, storageTypeInt, key)
+	s.writeTransaction(eventIncr, storageTypeInt, key, nil)
 
 	// response body should contain the preivous value
 	contents := strconv.FormatInt(int64(cmd.result.(int)), 10)
@@ -296,7 +300,7 @@ func (s *Service) floatGetHandler(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, cmd.err.Error(), http.StatusNotFound)
 		return
 	}
-	s.writeTransaction(eventGet, storageTypeFloat, key)
+	s.writeTransaction(eventGet, storageTypeFloat, key, nil)
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(fmt.Sprintf("%e", cmd.result)))
 }
@@ -337,7 +341,7 @@ func (s *Service) floatDeleteHandler(w http.ResponseWriter, req *http.Request) {
 	if cmd.deleted {
 		w.Header().Add("Deleted", "1")
 	}
-	s.writeTransaction(eventDel, storageTypeFloat, key)
+	s.writeTransaction(eventDel, storageTypeFloat, key, nil)
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -361,7 +365,7 @@ func (s *Service) delKeyHandler(w http.ResponseWriter, req *http.Request) {
 		cmd := storage.Del(key, newCmdResult())
 		if cmd.deleted {
 			w.Header().Add("Deleter", "1")
-			s.writeTransaction(eventDel, cmd.storageType, key)
+			s.writeTransaction(eventDel, cmd.storageType, key, nil)
 			break
 		}
 	}
@@ -530,9 +534,9 @@ func (s *Service) processSavedTransactions() error {
 	}
 }
 
-func (s *Service) writeTransaction(evenType EventType, storageType StorageType, key string, values ...interface{}) {
+func (s *Service) writeTransaction(evenType EventType, storageType StorageType, key string, value interface{}) {
 	if !s.settings.TransactionsDisabled {
-		s.writeTransaction(eventGet, storageTypeString, key)
+		s.writeTransaction(eventGet, storageTypeString, key, value)
 	}
 }
 
@@ -598,17 +602,15 @@ func (s *Service) Run() {
 
 	s.running = true
 
-	waitForPendingEvents := make(chan int, 1)
-	shutdownContext, cancel := context.WithCancel(context.Background())
+	shutdownCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	defer func() {
-		cancel()
-		<-waitForPendingEvents
-	}()
+	wg := sync.WaitGroup{}
 
+	wg.Add(1)
 	go func() {
-		s.txnLogger.processTransactions(shutdownContext)
-		waitForPendingEvents <- 1
+		defer wg.Done()
+		s.txnLogger.processTransactions(shutdownCtx)
 	}()
 
 	router := mux.NewRouter().StrictSlash(true)
@@ -650,7 +652,11 @@ func (s *Service) Run() {
 	log.Logger.Info("%s:%s service is running %s", info.ServiceName(), info.ServiceVersion(), s.settings.Endpoint)
 	if err := s.Server.ListenAndServe(); err != http.ErrServerClosed {
 		log.Logger.Error("Server terminated abnormally %v", err)
-		return
+	} else {
+		log.Logger.Info("Server was closed gracefully")
 	}
-	log.Logger.Info("Server was closed gracefully")
+
+	// Put both these fucns into a defer statement
+	cancel()
+	wg.Wait()
 }

@@ -1,6 +1,8 @@
 package kvs
 
-import "context"
+import (
+	"context"
+)
 
 // Figure out whether it's possible to endcode struct which have interface{} fields.
 // Because if we cannot, we would have to create multiple events, for each storage type.
@@ -15,7 +17,7 @@ const (
 )
 
 type TansactionLogger interface {
-	writeTransaction(evenType EventType, storageType StorageType, key string, values ...interface{})
+	writeTransaction(evenType EventType, storageType StorageType, key string, value interface{})
 	processTransactions(ctx context.Context)
 	readEvents() (<-chan Event, <-chan error)
 }

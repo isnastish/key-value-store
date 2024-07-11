@@ -3,10 +3,12 @@ package testsetup
 var postgresDockerImage = "postgres:16.3"
 
 func StartPostgresContainer() (bool, error) {
-	expectedOutput := "database system is ready to accept connections"
-	return startDockerContainer(expectedOutput, "docker", "run", "--rm", "--name", "postgres-emulator", "--env", "POSTGRES_PASSWORD=12345", "-p", "4040:5432", "--detach", postgresDockerImage)
+	expectedOutput := "PostgreSQL init process complete; ready for start up"
+	return startDockerContainer(
+		expectedOutput,
+		"docker", "run", "--rm", "--name", "postgres-emulator", "-p", "5432:5432", "-e", "POSTGRES_PASSWORD=12345", postgresDockerImage)
 }
 
 func KillPostgresContainer() {
-	killDockerContainer("docker", "rm", "--force", "posgres-emulator")
+	killDockerContainer("docker", "rm", "--force", "postgres-emulator")
 }
