@@ -47,15 +47,15 @@ func newFileTransactionsLogger(filePath string) (*FileTransactionLogger, error) 
 
 func (l *FileTransactionLogger) writeTransaction(eventType EventType, storageType StorageType, key string, values ...interface{}) {
 	// NOTE: Intentionally not specifying id, since it will be accessed by multiple goroutines
-	var val interface{}
-	if len(values) > 0 {
-		val = values[0]
-	}
+	// var val interface{}
+	// if len(values) > 0 {
+	// 	val = values[0]
+	// }
 	l.events <- Event{
 		Type:        eventType,
-		StorageType: storageType,
+		StorageType: storageType, // DELETE operation doesn't expect any values as well as GET
 		Key:         key,
-		Val:         val,
+		Val:         values,
 		Timestamp:   time.Now()}
 }
 
@@ -86,10 +86,12 @@ func (l *FileTransactionLogger) processTransactions(shutdownContext context.Cont
 			}
 			l.id++
 
-			log.Logger.Info("Wrote %s, id %d, storage %s, time %s",
-				event.Type.toStr(),
+			// NOTE: Since we encoding and decoding the data when doing file transactions,
+			// we don't need to have string representations for storage types, even for logging
+			log.Logger.Info("Wrote %s, id %d, storage %d, time %s",
+				eventToStr[event.Type],
 				event.Id,
-				event.StorageType.toStr(),
+				event.StorageType,
 				event.Timestamp.Format(time.TimeOnly),
 			)
 

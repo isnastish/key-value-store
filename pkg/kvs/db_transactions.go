@@ -18,8 +18,9 @@ type PostgresSettings struct {
 }
 
 type PostgresTransactionLogger struct {
-	events chan<- Event
-	errors <-chan error
+	// NOTE: Use chan Event/chan error instead
+	events chan Event
+	errors chan error
 	db     *sql.DB
 }
 
@@ -42,7 +43,11 @@ func newDBTransactionLogger(settings PostgresSettings) (*PostgresTransactionLogg
 		return nil, fmt.Errorf("failed to establish db connection %w", err)
 	}
 
-	logger := &PostgresTransactionLogger{db: db}
+	logger := &PostgresTransactionLogger{
+		db: db,
+		// events: make(chan Event),
+		// errors: make(chan error),
+	}
 
 	if err := logger.createTablesIfDontExist(); err != nil {
 		db.Close()
@@ -81,6 +86,8 @@ func (l *PostgresTransactionLogger) createTablesIfDontExist() error {
 		}
 	}
 	{
+		// NOTE: storing event_type as a string for convenience (as opposite to integers),
+		// so it's easy to inspect the data in a database
 		query := `CREATE TABLE IF NOT EXISTS integers_table (
 			id INTEGER PRIMARY KEY,
 			event_type VARCHAR(64),
@@ -103,7 +110,7 @@ func (l *PostgresTransactionLogger) createTablesIfDontExist() error {
 			time_stamp TIMESTAMP,
 			key TEXT UNIQUE,
 			value FLOAT
-		);` // Maybe use double precision?
+		);`
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -128,6 +135,8 @@ func (l *PostgresTransactionLogger) createTablesIfDontExist() error {
 		}
 	}
 	{
+		// NOTE: maps_table should consist of two tables which are related
+		// to each other by the hash
 		query := `CREATE TABLE IF NOT EXISTS maps_table (
 			id INTEGER PRIMARY KEY,
 			event_type VARCHAR(64),
@@ -148,13 +157,147 @@ func (l *PostgresTransactionLogger) createTablesIfDontExist() error {
 }
 
 func (l *PostgresTransactionLogger) writeTransaction(evenType EventType, storageType StorageType, key string, values ...interface{}) {
+	// NOTE: Id is not set to avoid declaring it as atomic
+	l.events <- Event{StorageType: storageType, Type: evenType, Key: key, Val: values, Timestamp: time.Now()}
+}
 
+func (l *PostgresTransactionLogger) insertEventIntoDB(event *Event) error {
+	var query string
+
+	queryCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	switch event.StorageType {
+	case storageTypeInt:
+		query = `INSERT INTO integers_table VALUES (
+			$1, $2, $3, $4, $5
+		);`
+		// TODO: Try out without a type cast
+		if _, err := l.db.ExecContext(queryCtx, query,
+			event.Id, eventToStr[event.Type], event.Timestamp, event.Key, event.Val.(int),
+		); err != nil {
+			return err
+		}
+
+	case storageTypeFloat:
+		query := `INSERT INTO floats_table VALUES (
+			$1, $2, $3, $4, $5
+		);`
+		if _, err := l.db.ExecContext(
+			queryCtx, query, event.Id, eventToStr[event.Type], event.Timestamp, event.Key, event.Val.(float32),
+		); err != nil {
+			return err
+		}
+
+	case storageTypeString:
+		query := `INSERT INTO strings_table (
+			$1, $2, $3, $4, $5
+		);`
+		if _, err := l.db.ExecContext(
+			queryCtx, query, event.Id, eventToStr[event.Type], event.Timestamp, event.Key, event.Val.(string),
+		); err != nil {
+			return err
+		}
+
+	case storageTypeMap:
+		// Insert everything into a single table for now. We can revise it on subsequent iterations
+		m := event.Val.(map[string]string)
+		hash := event.Key
+		for k, v := range m {
+			query := `INSERT INTO map_table VALUES (
+				$1, $2, $3, $4, $5, $6
+			);`
+			if _, err := l.db.ExecContext(
+				queryCtx, query, event.Id,
+				eventToStr[event.Type], event.Timestamp, hash, k, v,
+			); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
 }
 
 func (l *PostgresTransactionLogger) processTransactions(ctx context.Context) {
+	// TODO: Close db connection at the end.
+	events := make(chan Event, 32)
+	errors := make(chan error, 1)
 
+	l.events = events
+	l.errors = errors
+
+	var query string
+	var err error
+
+	for {
+		select {
+		case event := <-events:
+
+			if err != nil {
+				errors <- fmt.Errorf("failed to insert an event %w", err)
+				return
+			}
+
+		case <-ctx.Done():
+			// Finish writing pending events
+			for event := range events {
+				// insert
+				_ = event
+			}
+			errors <- ctx.Err()
+			return
+		}
+	}
 }
 
 func (l *PostgresTransactionLogger) readEvents() (<-chan Event, <-chan error) {
-	return nil, nil
+	events := make(chan Event)
+	errors := make(chan error, 1) // buffered error channel
+
+	// NOTE: The reason why we have to read from a db in a separate goroutine,
+	// is because the service will be receiving events and errors, to prevent blocking.
+
+	go func() {
+		// NOTE: Even though we close the channels before returning from the outer function,
+		// the receiver will still be able to read the events from the closed channel.
+		defer close(events)
+		defer close(errors)
+
+		// We can read simultaneously from multiple tables in a database by creating four separate go routines
+		{
+			// NOTE: This operation might take some time, so specifying the context of 10s
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+			defer cancel()
+
+			query := `SELECT event_type, key, value FROM integers_table;`
+			rows, err := l.db.QueryContext(ctx, query)
+			if err != nil {
+				errors <- fmt.Errorf("failed to query data from integers_table, %w", err)
+			}
+
+			var eventTypeStr string
+			var hashKey string
+			var value int
+
+			for rows.Next() {
+				if err := rows.Scan(&eventTypeStr, &hashKey, &value); err != nil {
+					errors <- err
+					return
+				}
+				events <- Event{
+					StorageType: storageTypeInt,
+					Type:        strToEvent[eventTypeStr],
+					Key:         hashKey, Val: value,
+				}
+			}
+
+			if rows.Err() != nil {
+				errors <- err
+				return
+			}
+		}
+	}()
+
+	return events, errors
 }

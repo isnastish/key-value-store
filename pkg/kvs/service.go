@@ -520,13 +520,12 @@ func (s *Service) processSavedTransactions() error {
 			return err
 		}
 
-		log.Logger.Info("Read %s, id %d, key %s, storage %s",
-			event.Type.toStr(),
+		log.Logger.Info("Read %s, id %d, key %s, storage %d",
+			eventToStr[event.Type],
 			event.Id,
 			event.Key,
-			event.StorageType.toStr(),
+			event.StorageType,
 		)
-
 		event = Event{}
 	}
 }
