@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strconv"
 	"time"
+	_ "time"
 	"unicode"
 
 	"github.com/gorilla/mux"
@@ -189,6 +190,7 @@ func (s *Service) intAddHandler(w http.ResponseWriter, req *http.Request) {
 	body, err := io.ReadAll(req.Body)
 	defer req.Body.Close()
 	if err != nil {
+		log.Logger.Error("Failed to read the body inside intAddHandler, error %v", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -566,9 +568,9 @@ func NewService(settings *ServiceSettings) *Service {
 	// https://stackoverflow.com/questions/39320025/how-to-stop-http-listenandserve
 	service := &Service{
 		Server: &http.Server{
-			Addr:         settings.Endpoint,
-			ReadTimeout:  5 * time.Second,
-			WriteTimeout: 5 * time.Second,
+			Addr: settings.Endpoint,
+			// ReadTimeout:  5 * time.Second,
+			// WriteTimeout: 5 * time.Second,
 		},
 		settings:    settings,
 		rpcHandlers: make([]*RPCHandler, 0),
@@ -641,8 +643,30 @@ func (s *Service) Run() {
 	subrouter.Path("/uintadd/{key:[0-9A-Za-z_]+}").HandlerFunc(s.uintGetHandler).Methods("GET")
 	subrouter.Path("/uintadd/{key:[0-9A-Za-z_]+}").HandlerFunc(s.uintDelHandler).Methods("DELETE")
 
+	triggerShutdown := make(chan bool)
+	shutdownCompleted := make(chan bool)
+	go func() {
+		<-triggerShutdown
+		// When Shutdown is called, [Serve], [ListenAndServe], and [ListenAndServeTLS] immediately return [ErrServerClosed].
+		// Make sure the program doesn't exit and waits instead for Shutdown to return.
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := s.Server.Shutdown(ctx); err != nil {
+			if err != context.DeadlineExceeded {
+				log.Logger.Error("Failed to shutdown the server %v", err)
+			}
+		}
+		close(shutdownCompleted)
+	}()
+
 	// Endpoint to delete a key from any type of storage
 	subrouter.Path("/del/{key:[0-9A-Za-z_]+}").HandlerFunc(s.delKeyHandler).Methods("DELETE")
+
+	subrouter.Path("/kill").HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		logOnEndpointHit(req.RequestURI, req.Method, req.RemoteAddr)
+		w.WriteHeader(http.StatusOK)
+		close(triggerShutdown)
+	}).Methods("POST")
 
 	s.Server.Handler = router
 
@@ -652,4 +676,6 @@ func (s *Service) Run() {
 	} else {
 		log.Logger.Info("Server was closed gracefully")
 	}
+
+	<-shutdownCompleted
 }
