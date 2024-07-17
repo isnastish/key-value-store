@@ -6,7 +6,7 @@ func StartPostgresContainer() (bool, error) {
 	expectedOutput := "PostgreSQL init process complete; ready for start up"
 	return startDockerContainer(
 		expectedOutput,
-		"docker", "run", "--rm", "--name", "postgres-emulator", "-p", "5432:5432", "-e", "POSTGRES_PASSWORD=12345", postgresDockerImage)
+		"docker", "run", "--rm", "--name", "postgres-emulator", "-p", "5432:5432", "-e", "POSTGRES_PASSWORD=nastish", postgresDockerImage)
 }
 
 func KillPostgresContainer() {

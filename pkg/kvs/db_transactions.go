@@ -2,15 +2,19 @@ package kvs
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"sync"
 	"time"
 
-	_ "github.com/lib/pq"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/isnastish/kvs/pkg/log"
 )
+
+// NOTE: If the value has been deleted, hence "delete" event was sent.
+// We have to clean up all the transactions, otherwise our transaction storage will
+// keep growing and we eventually run out of memory or ids to enumerate the transactions.
 
 type PostgresSettings struct {
 	host     string
@@ -21,36 +25,46 @@ type PostgresSettings struct {
 }
 
 type PostgresTransactionLogger struct {
-	// NOTE: Use chan Event/chan error instead
-	events chan<- Event
-	errors <-chan error
-	db     *sql.DB
-	wg     sync.WaitGroup
+	eventsChan chan<- Event
+	errorsChan <-chan error
+	dbpool     *pgxpool.Pool
+	wg         sync.WaitGroup
 }
 
 func newDBTransactionLogger(settings PostgresSettings) (*PostgresTransactionLogger, error) {
-	connStr := fmt.Sprintf("host=%s port=%d dbname=%s user=%s password=%s sslmode=disable", settings.host, settings.port, settings.dbName, settings.userName, settings.userPwd)
+	const DATABASE_URL = "postgresql://postgres:nastish@127.0.0.1:5432/postgres?sslmode=disable"
 
-	// NOTE: Might not create a connection, to establish the connection Ping should be used
-	// "postgres://username:password@localhost/db_name?sslmode=disable"
-	db, err := sql.Open("postgres", connStr)
+	dbconfig, err := pgxpool.ParseConfig(DATABASE_URL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build a config %w", err)
+	}
+
+	dbconfig.BeforeAcquire = func(ctx context.Context, conn *pgx.Conn) bool {
+		log.Logger.Info("Before acquiring connection from the pool")
+		return true
+	}
+
+	dbconfig.AfterRelease = func(conn *pgx.Conn) bool {
+		log.Logger.Info("After releasing connection from the pool")
+		return true
+	}
+
+	dbconfig.BeforeClose = func(conn *pgx.Conn) {
+		log.Logger.Info("Closing the connection")
+	}
+
+	dbpool, err := pgxpool.NewWithConfig(context.Background(), dbconfig)
 	if err != nil {
 		return nil, err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5000*time.Millisecond)
-	defer cancel()
-	err = db.PingContext(ctx)
-	if err != nil {
-		// NOTE: Almost always use %w instead of %v and %s for error formating
-		// https: //stackoverflow.com/questions/61283248/format-errors-in-go-s-v-or-w
+	if err := dbpool.Ping(context.Background()); err != nil {
 		return nil, fmt.Errorf("failed to establish db connection %w", err)
 	}
 
-	logger := &PostgresTransactionLogger{db: db, wg: sync.WaitGroup{}}
+	logger := &PostgresTransactionLogger{dbpool: dbpool, wg: sync.WaitGroup{}}
 
 	if err := logger.createTablesIfDontExist(); err != nil {
-		db.Close()
 		return nil, err
 	}
 
@@ -61,200 +75,205 @@ func (l *PostgresTransactionLogger) WaitForPendingTransactions() {
 	l.wg.Wait()
 }
 
-func (l *PostgresTransactionLogger) dropTable(table string) error {
-	query := fmt.Sprintf(`DROP TABLE IF EXISTS %s;`, table)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if _, err := l.db.ExecContext(ctx, query, table); err != nil {
-		return err
-	}
-	return nil
-}
-
 func (l *PostgresTransactionLogger) createTablesIfDontExist() error {
-	var (
-		err         error
-		query       string
-		queryCtx    context.Context
-		queryCancel context.CancelFunc
+	timeout := 15 * time.Second
 
-		ctxTimeout = 3 * time.Second
-	)
-
-	{
-		queryCtx, queryCancel = context.WithTimeout(context.Background(), ctxTimeout)
-		defer queryCancel()
-		query = `CREATE TABLE IF NOT EXISTS kvs_transactions_table (
-			id INTEGER,
-			event_type INTEGER,
-			storage_type INTEGER, 
-			PRIMARY KEY("id"));`
-		if _, err = l.db.ExecContext(queryCtx, query); err != nil {
-			return fmt.Errorf("failed to create transactions table %w", err)
-		}
+	dbconn, err := l.dbpool.Acquire(context.Background())
+	if err != nil {
+		return fmt.Errorf("failed to acquire db connection %w", err)
 	}
+	defer dbconn.Release()
+
+	// TODO: Figure out how to create a type if it doesn't exist
+	// {
+	// 	// Create a separate enum event type for storing events
+	// 	ctx, cancel = context.WithTimeout(context.Background(), ctxTimeout)
+	// 	defer cancel()
+	// 	query = `create type if not exists "event_type" as enum ('get', 'delete', 'put', 'update');`
+	// 	if _, err = l.db.ExecContext(ctx, query); err != nil {
+	// 		return fmt.Errorf("failed to create event type %w", err)
+	// 	}
+	// }
+
 	{
-		queryCtx, queryCancel = context.WithTimeout(context.Background(), ctxTimeout)
-		defer queryCancel()
-		query = `CREATE TABLE IF NOT EXISTS integers_table (
-			id INTEGER,
-			event_type VARCHAR(64),
-			key TEXT UNIQUE,
-			value INTEGER,
-			PRIMARY KEY("id"));`
-		if _, err = l.db.ExecContext(queryCtx, query); err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		query := `create table if not exists "integer_storage" (
+			"id" serial primary key,
+			"event" event_type not null,
+			"key" text not null,
+			"value" integer,
+			"inserttime" timestamp not null default now());`
+		if _, err := dbconn.Exec(ctx, query); err != nil {
 			return fmt.Errorf("failed to crete integers table %w", err)
 		}
 	}
 	{
-		queryCtx, queryCancel = context.WithTimeout(context.Background(), ctxTimeout)
-		defer queryCancel()
-		query = `CREATE TABLE IF NOT EXISTS floats_table (
-			id INTEGER,
-			event_type VARCHAR(64),
-			key TEXT UNIQUE,
-			value FLOAT,
-			PRIMARY KEY("id"));`
-		if _, err = l.db.ExecContext(queryCtx, query); err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		query := `create table if not exists "float_storage" (
+			"id" serial primary key,
+			"event" event_type not null,
+			"key" text not null,
+			"value" numeric,
+			"inserttime" timestamp not null default now());`
+		if _, err = dbconn.Exec(ctx, query); err != nil {
 			return fmt.Errorf("failed to crete floats table %w", err)
 		}
 	}
+
 	{
-		queryCtx, queryCancel = context.WithTimeout(context.Background(), ctxTimeout)
-		defer queryCancel()
-		query = `CREATE TABLE IF NOT EXISTS strings_table (
-			id INTEGER,
-			event_type VARCHAR(64),
-			key TEXT UNIQUE,
-			value TEXT, 
-			PRIMARY KEY("id"));`
-		if _, err = l.db.ExecContext(queryCtx, query); err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		query := `create table if not exists "string_storage" (
+			"id" serial primary key,
+			"event" event_type not null,
+			"key" text not null,
+			"value" text, 
+			"inserttime" timestamp not null default now());`
+		if _, err = dbconn.Exec(ctx, query); err != nil {
 			return fmt.Errorf("failed to create strings table %w", err)
 		}
 	}
-	{
-		// NOTE: Idealy, maps_table should consist of two tables which are related
-		// to each other by the hash
-		queryCtx, queryCancel = context.WithTimeout(context.Background(), ctxTimeout)
-		defer queryCancel()
-		query = `CREATE TABLE IF NOT EXISTS maps_table (
-			id INTEGER,
-			event_type VARCHAR(64),
-			map_hash TEXT UNIQUE,
-			key TEXT UNIQUE,
-			value TEXT,
-			PRIMARY KEY("id"));`
-		if _, err = l.db.ExecContext(queryCtx, query); err != nil {
-			return fmt.Errorf("failed to create maps table %w", err)
-		}
-	}
-	// TODO: Create a separate table for map key-values,
-	// because we cannot hold everything in one table
+
+	// {
+	// 	// NOTE: A separate table should be created for map's key-values.
+	// 	// Otherwise we end up having a lot of redundancies.
+	// 	ctx, cancel = context.WithTimeout(context.Background(), ctxTimeout)
+	// 	defer cancel()
+	// 	query = `create table if not exists "hashmap_storage" (
+	// 		"id" serial primary key,
+	// 		"event" event_type not null,
+	// 		"hash" text not null unique,
+	// 		"inserttime" timestamp not null default now());`
+	// 	if _, err = l.db.ExecContext(ctx, query); err != nil {
+	// 		return fmt.Errorf("failed to create maps table %w", err)
+	// 	}
+	// }
+
+	// {
+	// 	// NOTE: Use foreign key instead of using hashes from the parent table.
+	// 	ctx, cancel = context.WithTimeout(context.Background(), ctxTimeout)
+	// 	defer cancel()
+	// 	query = `create table if not exists "hashmap_data" (
+	// 		"id" serial primary key,
+	// 		"hash" text not null unique,
+	// 		"key" text not null,
+	// 		"value" text,
+	// 		primary key("id"));`
+	// }
 
 	return nil
 }
 
-func (l *PostgresTransactionLogger) WriteTransaction(evenType EventType, storageType StorageType, key string, value interface{}) {
-	// NOTE: At this point, events channel should be initialized,
-	// which is done in processTransactions procedure
-	l.events <- Event{StorageType: storageType, Type: evenType, Key: key, Val: value, Timestamp: time.Now()}
+func (l *PostgresTransactionLogger) WriteTransaction(eventType EventType, storage StorageType, key string, value interface{}) {
+	// NOTE: Timestamp is used for file transactions only.
+	// For Postgre we maintain a inserttime column which is default to now().
+	// So, whenever the transactions is inserted, a timestamp computed automatically.
+	l.eventsChan <- Event{storageType: storage, t: eventType, key: key, value: value}
 }
 
-func (l *PostgresTransactionLogger) insertEventIntoDB(event *Event) error {
-	var query string
+func insertTransactionIntoDB(dbconn *pgxpool.Conn, event *Event) error {
 	var err error
 
-	queryCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	switch event.StorageType {
-	case storageTypeInt:
-		query = `INSERT INTO integers_table VALUES ($1, $2, $3, $4);`
-		if event.Type == eventAdd {
-			_, err = l.db.ExecContext(queryCtx, query,
-				event.Id, eventToStr[event.Type], event.Key, event.Val.(int),
-			)
+	switch event.storageType {
+	case storageInt:
+		if event.t == eventPut {
+			query := `insert into "integer_storage" ("event", "key", "value") values ($1, $2, $3);`
+			_, err = dbconn.Exec(ctx, query, event.t, event.key, event.value.(int64))
 		} else {
-			_, err = l.db.ExecContext(queryCtx, query,
-				event.Id, eventToStr[event.Type], event.Key, 0,
-			)
+			query := `insert into "integer_storage" ("event", "key") values ($1, $2);`
+			_, err = dbconn.Exec(ctx, query, event.t, event.key)
 		}
-		// NOTE: For debugging only
-		if err == nil {
-			log.Logger.Info("Successfully added an event")
+		if err != nil {
+			return fmt.Errorf("failed to insert transaction into integer storage %w", err)
 		}
 
-	case storageTypeFloat:
-		query = `INSERT INTO "floats_table" VALUES ($1, $2, $3, $4);`
-		if event.Type == eventAdd {
-			_, err = l.db.ExecContext(queryCtx, query, event.Id,
-				eventToStr[event.Type], event.Key, event.Val.(float32),
-			)
+	case storageFloat:
+		if event.t == eventPut {
+			query := `insert into "float_storage" ("event", "key", "value") values ($1, $2, $3);`
+			_, err = dbconn.Exec(ctx, query, event.t, event.value.(float32))
 		} else {
-			_, err = l.db.ExecContext(queryCtx, query, event.Id,
-				eventToStr[event.Type], event.Key, float32(0),
-			)
+			query := `insert into "float_storage" ("event", "key") values ($1, $2);`
+			_, err = dbconn.Exec(ctx, query, event.t, event.key)
+		}
+		if err != nil {
+			return fmt.Errorf("failed to insert transaction into float storage %w", err)
 		}
 
-	case storageTypeString:
-		query = `INSERT INTO "strings_table" ($1, $2, $3, $4);`
-		if event.Val == eventAdd {
-			_, err = l.db.ExecContext(queryCtx, query, event.Id,
-				eventToStr[event.Type], event.Key, event.Val.(string))
+	case storageString:
+		if event.t == eventPut {
+			query := `insert into "string_storage" ("event", "key", "value") values ($1, $2, $3);`
+			_, err = dbconn.Exec(ctx, query, event.t, event.key, event.value.(string))
 		} else {
-			_, err = l.db.ExecContext(queryCtx, query, event.Id,
-				eventToStr[event.Type], event.Key, "")
+			query := `insert into "string_storage" ("event", "key") values ($1, $2);`
+			_, err = dbconn.Exec(ctx, query, event.t, event.key)
+		}
+		if err != nil {
+			return fmt.Errorf("failed to insert transaction into string storage %w", err)
 		}
 
-	case storageTypeMap:
-		query = `INSERT INTO "map_table" VALUES ($1, $2, $3, $4, $5);`
-		key := event.Key
-		if event.Type == eventAdd {
-			hashTable := event.Val.(map[string]string)
-			for k, v := range hashTable {
-				if _, err := l.db.ExecContext(queryCtx, query, event.Id,
-					eventToStr[event.Type], key, k, v,
-				); err != nil {
-					return err
-				}
-			}
-		} else {
-			_, err = l.db.ExecContext(queryCtx, query, event.Id,
-				eventToStr[event.Type], key, "", "",
-			)
-		}
+		// case storageTypeMap:
+		// 	query = `INSERT INTO "map_table" VALUES ($1, $2, $3, $4, $5);`
+		// 	key := event.Key
+		// 	if event.Type == eventAdd {
+		// 		hashTable := event.Val.(map[string]string)
+		// 		for k, v := range hashTable {
+		// 			if _, err := l.db.ExecContext(ctx, query, event.Id,
+		// 				eventToStr[event.Type], key, k, v,
+		// 			); err != nil {
+		// 				return err
+		// 			}
+		// 		}
+		// 	} else {
+		// 		_, err = l.db.ExecContext(ctx, query, event.Id,
+		// 			eventToStr[event.Type], key, "", "",
+		// 		)
+		// 	}
 	}
 	return err
 }
 
 func (l *PostgresTransactionLogger) ProcessTransactions(ctx context.Context) {
-	defer l.db.Close()
+	eventsChan := make(chan Event, 32)
+	errorsChan := make(chan error, 1)
 
-	events := make(chan Event, 32)
-	errors := make(chan error, 1)
-
-	l.events = events
-	l.errors = errors
+	l.eventsChan = eventsChan
+	l.errorsChan = errorsChan
 
 	l.wg.Add(1)
 	go func() {
 		defer l.wg.Done()
 
+		// This is the best place to close a connections pool.
+		// Once all the write completed.
+		defer l.dbpool.Close()
+
+		dbconn, err := l.dbpool.Acquire(context.Background())
+		if err != nil {
+			errorsChan <- fmt.Errorf("failed to acquire db connection %w", err)
+			return
+		}
+
+		// Release the acquired connection first, before closing the database connection.
+		defer dbconn.Release()
+
 		for {
 			select {
-			case event := <-events:
-				log.Logger.Info("Got event, inserting into the database")
-				if err := l.insertEventIntoDB(&event); err != nil {
-					errors <- err
+			case event := <-eventsChan:
+				if err := insertTransactionIntoDB(dbconn, &event); err != nil {
+					errorsChan <- err
 					return
 				}
 
 			case <-ctx.Done():
-				if len(events) > 0 {
-					log.Logger.Info("Writing pending events")
-					for event := range events {
-						if err := l.insertEventIntoDB(&event); err != nil {
-							errors <- err
+				if len(eventsChan) > 0 {
+					for event := range eventsChan {
+						if err := insertTransactionIntoDB(dbconn, &event); err != nil {
+							errorsChan <- err
 							return
 						}
 					}
@@ -265,86 +284,84 @@ func (l *PostgresTransactionLogger) ProcessTransactions(ctx context.Context) {
 	}()
 }
 
+func selectEventsFromTable(dbconn *pgxpool.Conn, storage StorageType, table string, eventsChan chan<- Event, errorsChan chan<- error) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	query := fmt.Sprintf(`select * from "%s";`, table)
+	rows, _ := dbconn.Query(ctx, query)
+	events, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Event, error) {
+		event := Event{storageType: storage}
+		err := row.Scan(&event.id, &event.t, &event.key, &event.value, &event.timestamp)
+		return event, err
+	})
+	if err != nil {
+		err = fmt.Errorf("failed to select events for %s table %w", table, err)
+		errorsChan <- err
+		return err
+	}
+
+	for _, event := range events {
+		log.Logger.Info("Read event: Event{id: %d, t: %s, key: %s, value: %v, timestamp: %s}",
+			event.id, event.t, event.key, event.value, event.timestamp.Format(time.DateTime))
+
+		eventsChan <- event
+	}
+
+	return nil
+}
+
 func (l *PostgresTransactionLogger) ReadEvents() (<-chan Event, <-chan error) {
-	events := make(chan Event)
-	errors := make(chan error, 1)
+	eventsChan := make(chan Event)
+	errorsChan := make(chan error, 1)
 
 	go func() {
-		// NOTE: Even though we close the channels before returning from the outer function,
-		// the receiver will still be able to read the events from the closed channel.
-		defer close(events)
-		defer close(errors)
+		defer close(eventsChan)
+		defer close(errorsChan)
 
-		var (
-			query       string
-			queryCtx    context.Context
-			queryCancel context.CancelFunc
-			ctxTimeout  = 10 * time.Second
-			event       string
-			key         string
-		)
-
-		{
-			query = `SELECT "event_type", "key", "value" FROM "integers_table";`
-			queryCtx, queryCancel = context.WithTimeout(context.Background(), ctxTimeout)
-			defer queryCancel()
-
-			rows, err := l.db.QueryContext(queryCtx, query)
-			if err != nil {
-				errors <- fmt.Errorf("failed to query data from integers_table, %w", err)
-				return
-			}
-			for rows.Next() {
-				value := 0
-				if err := rows.Scan(&event, &key, &value); err != nil {
-					errors <- err
-					return
-				}
-				events <- Event{StorageType: storageTypeInt, Type: strToEvent[event], Key: key, Val: value}
-			}
+		dbconn, err := l.dbpool.Acquire(context.Background())
+		if err != nil {
+			errorsChan <- fmt.Errorf("failed to acquire db connection %w", err)
+			return
 		}
-		{
-			query = `SELECT "event_type", "key", "value" FROM "floats_table";`
-			queryCtx, queryCancel = context.WithTimeout(context.Background(), ctxTimeout)
-			defer queryCancel()
+		defer dbconn.Release()
 
-			rows, err := l.db.QueryContext(queryCtx, query)
-			if err != nil {
-				errors <- fmt.Errorf("failed to retrieve data from floats_table %w", err)
-				return
-			}
-
-			for rows.Next() {
-				var value float32 = 0.0
-				if err := rows.Scan(&event, &key, &value); err != nil {
-					errors <- err
-					return
-				}
-				events <- Event{StorageType: storageTypeInt, Type: strToEvent[event], Key: key, Val: value}
-			}
+		if err := selectEventsFromTable(dbconn, storageInt, "integer_storage", eventsChan, errorsChan); err != nil {
+			return
 		}
-		{
-			query = `SELECT "event_type", "key", "value" FROM "strings_table";`
-			queryCtx, queryCancel = context.WithTimeout(context.Background(), ctxTimeout)
-			defer queryCancel()
 
-			rows, err := l.db.QueryContext(queryCtx, query)
-			if err != nil {
-				errors <- fmt.Errorf("failed to retrieve data from strings_table %w", err)
-				return
-			}
-
-			for rows.Next() {
-				var value string
-				if err := rows.Scan(&event, &key, &value); err != nil {
-					errors <- err
-					return
-				}
-				events <- Event{StorageType: storageTypeInt, Type: strToEvent[event], Key: key, Val: value}
-			}
+		if err := selectEventsFromTable(dbconn, storageFloat, "float_storage", eventsChan, errorsChan); err != nil {
+			return
 		}
+
+		if err := selectEventsFromTable(dbconn, storageString, "string_storage", eventsChan, errorsChan); err != nil {
+			return
+		}
+
+		// {
+		// 	query := `select * from "map_storage";`
+		// 	ctx, cancel = context.WithTimeout(context.Background(), ctxTimeout)
+		// 	defer cancel()
+
+		// 	rows, err := l.db.QueryContext(ctx, query)
+		// 	if err != nil {
+		// 		errors <- fmt.Errorf("failed to select data from string storage %w", err)
+		// 		return
+		// 	}
+		// 	for rows.Next() {
+		// 		var value string
+		// 		if err := rows.Scan(&event, &key, &value); err != nil {
+		// 			errors <- err
+		// 			return
+		// 		}
+		// 		events <- Event{StorageType: storageTypeInt, Type: strToEvent[event], Key: key, Val: value}
+		// 	}
+		// 	if rows.Err() != nil {
+		// 		errors <- rows.Err()
+		// 	}
+		// }
 		// TODO: Add map implementation
 	}()
 
-	return events, errors
+	return eventsChan, errorsChan
 }

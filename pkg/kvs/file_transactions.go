@@ -49,13 +49,8 @@ func (l *FileTransactionLogger) WaitForPendingTransactions() {
 
 }
 
-func (l *FileTransactionLogger) WriteTransaction(eventType EventType, storageType StorageType, key string, value interface{}) {
-	l.events <- Event{
-		Type:        eventType,
-		StorageType: storageType,
-		Key:         key,
-		Val:         value,
-		Timestamp:   time.Now()}
+func (l *FileTransactionLogger) WriteTransaction(eventType EventType, storage StorageType, key string, value interface{}) {
+	l.events <- Event{storageType: storage, t: eventType, key: key, value: value, timestamp: time.Now()}
 }
 
 func (l *FileTransactionLogger) ProcessTransactions(shutdownContext context.Context) {
@@ -79,7 +74,7 @@ func (l *FileTransactionLogger) ProcessTransactions(shutdownContext context.Cont
 	for {
 		select {
 		case event := <-events:
-			event.Id = l.id
+			event.id = l.id
 			if !encodeEvent(&event) {
 				return
 			}
@@ -87,12 +82,8 @@ func (l *FileTransactionLogger) ProcessTransactions(shutdownContext context.Cont
 
 			// NOTE: Since we encoding and decoding the data when doing file transactions,
 			// we don't need to have string representations for storage types, even for logging
-			log.Logger.Info("Wrote %s, id %d, storage %d, time %s",
-				eventToStr[event.Type],
-				event.Id,
-				event.StorageType,
-				event.Timestamp.Format(time.TimeOnly),
-			)
+			log.Logger.Info("Wrote event: Event{id: %d, t: %s, key: %s, value: %v, timestamp: %v}",
+				event.id, event.t, event.key, event.value, event.timestamp)
 
 		case <-shutdownContext.Done():
 			log.Logger.Info("Finishing writing pending events")
@@ -100,7 +91,7 @@ func (l *FileTransactionLogger) ProcessTransactions(shutdownContext context.Cont
 			// otherwise the events might get lost, which will be imposible to replay them.
 			if len(events) != 0 {
 				for event := range events {
-					event.Id = l.id
+					event.id = l.id
 					if !encodeEvent(&event) {
 						return
 					}
