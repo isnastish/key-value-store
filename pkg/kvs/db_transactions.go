@@ -75,6 +75,18 @@ func (l *PostgresTransactionLogger) WaitForPendingTransactions() {
 	l.wg.Wait()
 }
 
+func (l *PostgresTransactionLogger) dropTableIfExists(dbconn *pgxpool.Conn, table string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	query := fmt.Sprintf(`drop table if exists "%s";`, table)
+	if _, err := dbconn.Exec(ctx, query); err != nil {
+		return fmt.Errorf("failed to drop the table %s, %w", table, err)
+	}
+
+	return nil
+}
+
 func (l *PostgresTransactionLogger) createTablesIfDontExist() error {
 	timeout := 15 * time.Second
 
@@ -84,84 +96,146 @@ func (l *PostgresTransactionLogger) createTablesIfDontExist() error {
 	}
 	defer dbconn.Release()
 
-	// TODO: Figure out how to create a type if it doesn't exist
-	// {
-	// 	// Create a separate enum event type for storing events
-	// 	ctx, cancel = context.WithTimeout(context.Background(), ctxTimeout)
-	// 	defer cancel()
-	// 	query = `create type if not exists "event_type" as enum ('get', 'delete', 'put', 'update');`
-	// 	if _, err = l.db.ExecContext(ctx, query); err != nil {
-	// 		return fmt.Errorf("failed to create event type %w", err)
-	// 	}
-	// }
-
-	{
+	createTxnKeyTable := func(dbconn *pgxpool.Conn, tableName string) error {
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
-		query := `create table if not exists "integer_storage" (
+
+		query := fmt.Sprintf(`create table if not exists "%s" (
 			"id" serial primary key,
-			"event" event_type not null,
-			"key" text not null,
-			"value" integer,
-			"inserttime" timestamp not null default now());`
+			"key" text not null unique);`, tableName)
+
 		if _, err := dbconn.Exec(ctx, query); err != nil {
-			return fmt.Errorf("failed to crete integers table %w", err)
+			return fmt.Errorf("failed to create %s table %w", tableName, err)
 		}
+
+		return nil
 	}
+
+	// TODO: Once we establish the structure of hwo the tables should look like,
+	// we can factor them out into functions to avoid code duplications.
+	// Maybe even create all the tables in a single batch?
+
+	// integer transactions
 	{
+		if err := createTxnKeyTable(dbconn, "integer_keys"); err != nil {
+			return err
+		}
+
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
-		query := `create table if not exists "float_storage" (
+
+		query := `create table if not exists "integer_txns" (
 			"id" serial primary key,
-			"event" event_type not null,
-			"key" text not null,
+			"type" varchar(32) not null check("type" in ('put', 'get', 'delete', 'incr', 'incrby')),
+			"key_id" integer,
+			"value" integer,
+			"timestamp" timestamp not null default now(),
+			foreign key("key_id") references "integer_keys"("id") on delete cascade);`
+
+		if _, err := dbconn.Exec(ctx, query); err != nil {
+			return fmt.Errorf("failed to create integer transaction table %w", err)
+		}
+	}
+	// float transactions
+	{
+		if err := createTxnKeyTable(dbconn, "float_keys"); err != nil {
+			return err
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+
+		query := `create table if not exists "float_txns" (
+			"id" serial primary key,
+			"type" varchar(32) not null check("type" in ('put', 'get', 'delete', 'incr', 'incrby')),
+			"key_id" integer,
 			"value" numeric,
-			"inserttime" timestamp not null default now());`
+			"timestamp" timestamp not null default now(),
+			foreign key("key_id") references "float_keys"("id") on delete cascade);`
+
+		if _, err := dbconn.Exec(ctx, query); err != nil {
+			return fmt.Errorf("failed to create float transaction table %w", err)
+		}
+	}
+	// string transactions
+	{
+		if err := createTxnKeyTable(dbconn, "string_keys"); err != nil {
+			return err
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+
+		query := `create table if not exists "string_txns" (
+			"id" serial primary key,
+			"type" varchar(32) not null check("type" in ('put', 'get', 'delete', 'incr', 'incrby')),
+			"key_id" integer,
+			"value" text,
+			"timestamp" timestamp not null default now(),
+			foreign key("key_id") references "string_keys"("id") on delete cascade);`
+
 		if _, err = dbconn.Exec(ctx, query); err != nil {
-			return fmt.Errorf("failed to crete floats table %w", err)
+			return fmt.Errorf("failed to crete string transactions table %w", err)
+		}
+	}
+	// map transactions
+	{
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+
+		// |------------------|
+		// | id |     hash    |
+		// |----|-------------|
+		// | 0  |  "foo_hash" |
+		// | 1  |  "bar_hash" |
+		query := `create table if not exists "map_hash_ids" (
+			"id" serial primary key, 
+			"hash" text not null unique);`
+
+		if _, err = dbconn.Exec(ctx, query); err != nil {
+			return fmt.Errorf("failed to created map subtable %w", err)
 		}
 	}
 
 	{
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
-		query := `create table if not exists "string_storage" (
+
+		// |---------------------|
+		// | id | event | map_id | <- id of the hash in a different table
+		// |----|-------|--------|
+		// | 0  | 'put' |   12   |
+		// | 1  | 'put' |   14   |
+		query := `create table if not exists "map_storage" (
 			"id" serial primary key,
-			"event" event_type not null,
-			"key" text not null,
-			"value" text, 
-			"inserttime" timestamp not null default now());`
+			"event" varchar(32) not null,
+			"map_id" integer, 
+			"timestampt" timestamp not null default now(), 
+			foreign key("map_id") references "map_hash_ids"("id") on delete cascade);`
+
 		if _, err = dbconn.Exec(ctx, query); err != nil {
-			return fmt.Errorf("failed to create strings table %w", err)
+			return fmt.Errorf("failed to create map storage %w", err)
 		}
 	}
 
-	// {
-	// 	// NOTE: A separate table should be created for map's key-values.
-	// 	// Otherwise we end up having a lot of redundancies.
-	// 	ctx, cancel = context.WithTimeout(context.Background(), ctxTimeout)
-	// 	defer cancel()
-	// 	query = `create table if not exists "hashmap_storage" (
-	// 		"id" serial primary key,
-	// 		"event" event_type not null,
-	// 		"hash" text not null unique,
-	// 		"inserttime" timestamp not null default now());`
-	// 	if _, err = l.db.ExecContext(ctx, query); err != nil {
-	// 		return fmt.Errorf("failed to create maps table %w", err)
-	// 	}
-	// }
+	{
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
 
-	// {
-	// 	// NOTE: Use foreign key instead of using hashes from the parent table.
-	// 	ctx, cancel = context.WithTimeout(context.Background(), ctxTimeout)
-	// 	defer cancel()
-	// 	query = `create table if not exists "hashmap_data" (
-	// 		"id" serial primary key,
-	// 		"hash" text not null unique,
-	// 		"key" text not null,
-	// 		"value" text,
-	// 		primary key("id"));`
-	// }
+		// |---------------------------------------|
+		// | id | map_id  |   key     |    value   |
+		// |----|---------|-----------|------------|
+		// |  0 |  12     | "foo_bar" |  "baz"     |
+		query := `create table if not exists "map_key_value_pairs" (
+			"map_id" integer,
+			"key" text not null,
+			"value" text not null, 
+			foreign key("map_id") references "map_hash_ids"("id") on delete cascade);`
+
+		if _, err = dbconn.Exec(ctx, query); err != nil {
+			return fmt.Errorf("failed to create map key-value table %w", err)
+		}
+	}
 
 	return nil
 }
@@ -182,6 +256,10 @@ func insertTransactionIntoDB(dbconn *pgxpool.Conn, event *Event) error {
 	switch event.storageType {
 	case storageInt:
 		if event.t == eventPut {
+			// `integer_keys` table should contain unique keys only,
+			// thus we have to check whether the key exists first,
+			// and insert it only if it doesn't.
+			dbconn.Query(ctx, `insert into "integer_keys", `)
 			query := `insert into "integer_storage" ("event", "key", "value") values ($1, $2, $3);`
 			_, err = dbconn.Exec(ctx, query, event.t, event.key, event.value.(int64))
 		} else {
@@ -216,25 +294,45 @@ func insertTransactionIntoDB(dbconn *pgxpool.Conn, event *Event) error {
 			return fmt.Errorf("failed to insert transaction into string storage %w", err)
 		}
 
-		// case storageTypeMap:
-		// 	query = `INSERT INTO "map_table" VALUES ($1, $2, $3, $4, $5);`
-		// 	key := event.Key
-		// 	if event.Type == eventAdd {
-		// 		hashTable := event.Val.(map[string]string)
-		// 		for k, v := range hashTable {
-		// 			if _, err := l.db.ExecContext(ctx, query, event.Id,
-		// 				eventToStr[event.Type], key, k, v,
-		// 			); err != nil {
-		// 				return err
-		// 			}
-		// 		}
-		// 	} else {
-		// 		_, err = l.db.ExecContext(ctx, query, event.Id,
-		// 			eventToStr[event.Type], key, "", "",
-		// 		)
-		// 	}
+	case storageMap:
+		// Get id of the hash if it already exists
+		var hashId int32
+
+		// NOTE: Create a separate context for each query?
+		rows, _ := dbconn.Query(context.Background(), `select "hash_id" from "map_hash_ids" where "hash" = $1;`, event.key)
+		hashIds, err := pgx.CollectRows(rows, pgx.RowTo[int32])
+		if err != nil {
+			return fmt.Errorf("failed to select hash ids %w", err)
+		}
+		if len(hashIds) == 0 {
+			rows, _ = dbconn.Query(context.Background(), `insert into "map_hash_ids" ("hash") values ($1) returning "hash_id";`, event.key)
+			hashId, err = pgx.CollectOneRow(rows, pgx.RowTo[int32])
+			if err != nil {
+				return fmt.Errorf("failed to insert a new hash %s, %w", event.key, err)
+			}
+		} else {
+			hashId = hashIds[0]
+		}
+
+		if _, err = dbconn.Exec(context.Background(), `insert into "map_storage" ("event", "hash_id") values ($1, $2);`, event.t, hashId); err != nil {
+			return fmt.Errorf("failed to insert transaction into map storage %w", err)
+		}
+
+		if event.t == eventPut {
+			// send all the queires in a single batch
+			// Batches are transactional, meaning that they are implicitly wrapped into Begin/Commit
+			batch := &pgx.Batch{}
+			for key, value := range event.value.(map[string]string) {
+				batch.Queue(`inset into "map_key_value_pairs" ("hash_id", "key", "value") values ($1, $2, $3);`, hashId, key, value)
+			}
+			err = dbconn.SendBatch(context.Background(), batch).Close()
+			if err != nil {
+				return fmt.Errorf("failed to insert into map key-value table %w", err)
+			}
+		}
 	}
-	return err
+
+	return nil
 }
 
 func (l *PostgresTransactionLogger) ProcessTransactions(ctx context.Context) {
@@ -288,6 +386,8 @@ func selectEventsFromTable(dbconn *pgxpool.Conn, storage StorageType, table stri
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
+	// TODO: If the query return n column, but the struct has n-1 columns,
+	// use RowToStructByNameLax? But in that case, the Event sturct should have tags assigned to it.
 	query := fmt.Sprintf(`select * from "%s";`, table)
 	rows, _ := dbconn.Query(ctx, query)
 	events, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Event, error) {
@@ -338,29 +438,26 @@ func (l *PostgresTransactionLogger) ReadEvents() (<-chan Event, <-chan error) {
 			return
 		}
 
-		// {
-		// 	query := `select * from "map_storage";`
-		// 	ctx, cancel = context.WithTimeout(context.Background(), ctxTimeout)
-		// 	defer cancel()
+		{
+			type HashBundle struct {
+				Id   int32
+				Hash string
+			}
 
-		// 	rows, err := l.db.QueryContext(ctx, query)
-		// 	if err != nil {
-		// 		errors <- fmt.Errorf("failed to select data from string storage %w", err)
-		// 		return
-		// 	}
-		// 	for rows.Next() {
-		// 		var value string
-		// 		if err := rows.Scan(&event, &key, &value); err != nil {
-		// 			errors <- err
-		// 			return
-		// 		}
-		// 		events <- Event{StorageType: storageTypeInt, Type: strToEvent[event], Key: key, Val: value}
-		// 	}
-		// 	if rows.Err() != nil {
-		// 		errors <- rows.Err()
-		// 	}
-		// }
-		// TODO: Add map implementation
+			// Select all the hashes and their ids
+			rows, _ := dbconn.Query(context.Background(), `select ("hash_id", "hash") from "map_hash_ids";`)
+			hashes, err := pgx.CollectRows(rows, pgx.RowToStructByPos[HashBundle])
+			if err != nil {
+				errorsChan <- fmt.Errorf("failed to select map hashes %w", err)
+				return
+			}
+
+			_ = hashes
+			// batch := &pgx.Batch{}
+			// for b := range hashes {
+			// 	batch.Queue(`select ("event") from "map_storage" where "hash_id" = ($1);`, id)
+			// }
+		}
 	}()
 
 	return eventsChan, errorsChan
