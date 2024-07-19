@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strconv"
 	"time"
+	_ "time"
 	"unicode"
 
 	"github.com/gorilla/mux"
@@ -20,6 +21,9 @@ import (
 // TODO: Implement a throttle pattern on the server side.
 // We should limit the amount of requests a client can make to a service
 // to 10 requests per second.
+
+// NOTE: Instead of passing nil when making GET/DELETE transactions, introduce separate functions
+// writeGetTransaction(), writeDeleteTransaction() and only pass the information, (key and a storageType)
 
 type ServiceSettings struct {
 	Endpoint    string
@@ -47,11 +51,11 @@ type Service struct {
 	settings    *ServiceSettings
 	rpcHandlers []*RPCHandler
 	storage     map[StorageType]Storage
-	txnLogger   TansactionLogger
+	logger      TansactionLogger
 	running     bool
 }
 
-func (s *Service) stringAddHandler(w http.ResponseWriter, req *http.Request) {
+func (s *Service) stringPutHandler(w http.ResponseWriter, req *http.Request) {
 	logOnEndpointHit(req.RequestURI, req.Method, req.RemoteAddr)
 
 	key := mux.Vars(req)["key"]
@@ -61,13 +65,13 @@ func (s *Service) stringAddHandler(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	cmd := s.storage[storageTypeString].Add(key, newCmdResult(string(val)))
+	cmd := s.storage[storageString].Put(key, newCmdResult(string(val)))
 	if cmd.err != nil {
 		http.Error(w, cmd.err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	s.writeTransaction(eventAdd, storageTypeString, key, string(val))
+	s.writeTransaction(eventPut, storageString, key, string(val))
 
 	w.WriteHeader(http.StatusOK)
 }
@@ -76,13 +80,13 @@ func (s *Service) stringGetHandler(w http.ResponseWriter, req *http.Request) {
 	logOnEndpointHit(req.RequestURI, req.Method, req.RemoteAddr)
 
 	key := mux.Vars(req)["key"]
-	cmd := s.storage[storageTypeString].Get(key, newCmdResult())
+	cmd := s.storage[storageString].Get(key, newCmdResult())
 	if cmd.err != nil {
 		http.Error(w, cmd.err.Error(), http.StatusNotFound)
 		return
 	}
 
-	s.writeTransaction(eventGet, storageTypeString, key)
+	s.writeTransaction(eventGet, storageString, key, nil)
 
 	bytes := []byte(cmd.result.(string))
 	w.Header().Add("Content-Type", "text/plain")
@@ -96,13 +100,13 @@ func (s *Service) stringDeleteHandler(w http.ResponseWriter, req *http.Request) 
 	logOnEndpointHit(req.RequestURI, req.Method, req.RemoteAddr)
 
 	key := mux.Vars(req)["key"]
-	cmd := s.storage[storageTypeString].Del(key, newCmdResult())
+	cmd := s.storage[storageString].Del(key, newCmdResult())
 	if cmd.err != nil {
 		http.Error(w, cmd.err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	s.writeTransaction(eventDel, storageTypeString, key)
+	s.writeTransaction(eventDel, storageString, key, nil)
 
 	if cmd.deleted {
 		w.Header().Add("Deleted", "1")
@@ -111,7 +115,7 @@ func (s *Service) stringDeleteHandler(w http.ResponseWriter, req *http.Request) 
 	w.WriteHeader(http.StatusOK)
 }
 
-func (s *Service) mapAddHandler(w http.ResponseWriter, req *http.Request) {
+func (s *Service) mapPutHandler(w http.ResponseWriter, req *http.Request) {
 	logOnEndpointHit(req.RequestURI, req.Method, req.RemoteAddr)
 
 	key := mux.Vars(req)["key"]
@@ -127,12 +131,12 @@ func (s *Service) mapAddHandler(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	cmd := s.storage[storageTypeMap].Add(key, newCmdResult(hashMap))
+	cmd := s.storage[storageMap].Put(key, newCmdResult(hashMap))
 	if cmd.err != nil {
 		http.Error(w, cmd.err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.writeTransaction(eventAdd, storageTypeMap, key, hashMap)
+	s.writeTransaction(eventPut, storageMap, key, hashMap)
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -140,12 +144,12 @@ func (s *Service) mapGetHandler(w http.ResponseWriter, req *http.Request) {
 	logOnEndpointHit(req.RequestURI, req.Method, req.RemoteAddr)
 
 	key := mux.Vars(req)["key"]
-	cmd := s.storage[storageTypeMap].Get(key, newCmdResult())
+	cmd := s.storage[storageMap].Get(key, newCmdResult())
 	if cmd.err != nil {
 		http.Error(w, cmd.err.Error(), http.StatusNotFound)
 		return
 	}
-	s.writeTransaction(eventGet, storageTypeMap, key)
+	s.writeTransaction(eventGet, storageMap, key, nil)
 
 	// NOTE: Maybe instead of transferring a stream of bytes, we could send the data
 	// for the map in a json format? The content-type would have to be changed to application/json
@@ -166,12 +170,12 @@ func (s *Service) mapDeleteHandler(w http.ResponseWriter, req *http.Request) {
 	logOnEndpointHit(req.RequestURI, req.Method, req.RemoteAddr)
 
 	key := mux.Vars(req)["key"]
-	cmd := s.storage[storageTypeMap].Del(key, newCmdResult())
+	cmd := s.storage[storageMap].Del(key, newCmdResult())
 	if cmd.err != nil {
 		http.Error(w, cmd.err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.writeTransaction(eventDel, storageTypeMap, key)
+	s.writeTransaction(eventDel, storageMap, key, nil)
 
 	if cmd.deleted {
 		w.Header().Add("Deleted", "1")
@@ -179,27 +183,29 @@ func (s *Service) mapDeleteHandler(w http.ResponseWriter, req *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func (s *Service) intAddHandler(w http.ResponseWriter, req *http.Request) {
+func (s *Service) intPutHandler(w http.ResponseWriter, req *http.Request) {
 	logOnEndpointHit(req.RequestURI, req.Method, req.RemoteAddr)
-
+	// TODO: Check the range the integer was passed,
+	// because int on the python side is not equivalent to int in golang and other languages.
 	key := mux.Vars(req)["key"]
 	body, err := io.ReadAll(req.Body)
 	defer req.Body.Close()
 	if err != nil {
+		log.Logger.Error("Failed to read the body inside intAddHandler, error %v", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	val, err := strconv.Atoi(string(body))
+	val, err := strconv.ParseInt(string(body), 10, 32)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	cmd := s.storage[storageTypeInt].Add(key, newCmdResult(val))
+	cmd := s.storage[storageInt].Put(key, newCmdResult(int32(val)))
 	if cmd.err != nil {
 		http.Error(w, cmd.err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.writeTransaction(eventAdd, storageTypeInt, key, val)
+	s.writeTransaction(eventPut, storageInt, key, int32(val))
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -207,12 +213,12 @@ func (s *Service) intGetHandler(w http.ResponseWriter, req *http.Request) {
 	logOnEndpointHit(req.RequestURI, req.Method, req.RemoteAddr)
 
 	key := mux.Vars(req)["key"]
-	cmd := s.storage[storageTypeInt].Get(key, newCmdResult())
+	cmd := s.storage[storageInt].Get(key, newCmdResult())
 	if cmd.err != nil {
 		http.Error(w, cmd.err.Error(), http.StatusNotFound)
 		return
 	}
-	s.writeTransaction(eventGet, storageTypeInt, key)
+	s.writeTransaction(eventGet, storageInt, key, nil)
 
 	w.Header().Add("Conent-Type", "text/plain")
 	w.WriteHeader(http.StatusOK)
@@ -223,12 +229,12 @@ func (s *Service) intDeleteHandler(w http.ResponseWriter, req *http.Request) {
 	logOnEndpointHit(req.RequestURI, req.Method, req.RemoteAddr)
 
 	key := mux.Vars(req)["key"]
-	cmd := s.storage[storageTypeInt].Del(key, newCmdResult())
+	cmd := s.storage[storageInt].Del(key, newCmdResult())
 	if cmd.err != nil {
 		http.Error(w, cmd.err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.writeTransaction(eventDel, storageTypeInt, key)
+	s.writeTransaction(eventDel, storageInt, key, nil)
 
 	if cmd.deleted {
 		w.Header().Add("Deleted", "1")
@@ -240,16 +246,16 @@ func (s *Service) intIncrHandler(w http.ResponseWriter, req *http.Request) {
 	logOnEndpointHit(req.RequestURI, req.Method, req.RemoteAddr)
 
 	key := mux.Vars(req)["key"]
-	intStorage := s.storage[storageTypeInt].(*IntStorage)
+	intStorage := s.storage[storageInt].(*IntStorage)
 	cmd := intStorage.Incr(key, newCmdResult())
 	if cmd.err != nil {
 		http.Error(w, cmd.err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.writeTransaction(eventIncr, storageTypeInt, key)
+	s.writeTransaction(eventIncr, storageInt, key, nil)
 
 	// response body should contain the preivous value
-	contents := strconv.FormatInt(int64(cmd.result.(int)), 10)
+	contents := strconv.FormatInt(int64(cmd.result.(int32)), 10)
 	w.Header().Add("Content-Type", "application/octet-stream")
 	w.Header().Add("Content-Length", fmt.Sprintf("%d", len(contents)))
 	w.WriteHeader(http.StatusOK)
@@ -271,16 +277,16 @@ func (s *Service) intIncrByHandler(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	intStorage := s.storage[storageTypeInt].(*IntStorage)
-	cmd := intStorage.IncrBy(key, newCmdResult(int(val)))
+	intStorage := s.storage[storageInt].(*IntStorage)
+	cmd := intStorage.IncrBy(key, newCmdResult(int32(val)))
 	if cmd.err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.writeTransaction(eventIncrBy, storageTypeInt, key, val)
+	s.writeTransaction(eventIncrBy, storageInt, key, int32(val))
 
 	// response should contain the previously inserted value
-	contents := strconv.FormatInt(int64(cmd.result.(int)), 10)
+	contents := strconv.FormatInt(int64(cmd.result.(int32)), 10)
 	w.Header().Add("Content-Type", "application/octet-stream")
 	w.Header().Add("Content-Length", fmt.Sprintf("%d", len(contents)))
 	w.WriteHeader(http.StatusOK)
@@ -291,17 +297,21 @@ func (s *Service) floatGetHandler(w http.ResponseWriter, req *http.Request) {
 	logOnEndpointHit(req.RequestURI, req.Method, req.RemoteAddr)
 
 	key := mux.Vars(req)["key"]
-	cmd := s.storage[storageTypeFloat].Get(key, newCmdResult())
+	cmd := s.storage[storageFloat].Get(key, newCmdResult())
 	if cmd.err != nil {
 		http.Error(w, cmd.err.Error(), http.StatusNotFound)
 		return
 	}
-	s.writeTransaction(eventGet, storageTypeFloat, key)
+	s.writeTransaction(eventGet, storageFloat, key, nil)
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(fmt.Sprintf("%e", cmd.result)))
 }
 
-func (s *Service) floatAddHandler(w http.ResponseWriter, req *http.Request) {
+func (s *Service) floatPutHandler(w http.ResponseWriter, req *http.Request) {
+	// If the value with the given key already exists,
+	// and the value is the same, we shouldn't make any transactions,
+	// because it would be a duplicate and only exhaust the memory.
+	// We can introduce an update transaction for example as well.
 	logOnEndpointHit(req.RequestURI, req.Method, req.RemoteAddr)
 
 	key := mux.Vars(req)["key"]
@@ -316,12 +326,12 @@ func (s *Service) floatAddHandler(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	cmd := s.storage[storageTypeFloat].Add(key, newCmdResult(val))
+	cmd := s.storage[storageFloat].Put(key, newCmdResult(float32(val)))
 	if cmd.err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.writeTransaction(eventAdd, storageTypeFloat, key, val)
+	s.writeTransaction(eventPut, storageFloat, key, float32(val))
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -329,7 +339,7 @@ func (s *Service) floatDeleteHandler(w http.ResponseWriter, req *http.Request) {
 	logOnEndpointHit(req.RequestURI, req.Method, req.RemoteAddr)
 
 	key := mux.Vars(req)["key"]
-	cmd := s.storage[storageTypeFloat].Del(key, newCmdResult())
+	cmd := s.storage[storageFloat].Del(key, newCmdResult())
 	if cmd.err != nil {
 		http.Error(w, cmd.err.Error(), http.StatusInternalServerError)
 		return
@@ -337,11 +347,11 @@ func (s *Service) floatDeleteHandler(w http.ResponseWriter, req *http.Request) {
 	if cmd.deleted {
 		w.Header().Add("Deleted", "1")
 	}
-	s.writeTransaction(eventDel, storageTypeFloat, key)
+	s.writeTransaction(eventDel, storageFloat, key, nil)
 	w.WriteHeader(http.StatusOK)
 }
 
-func (s *Service) uintAddHandler(w http.ResponseWriter, r *http.Request) {
+func (s *Service) uintPutHandler(w http.ResponseWriter, r *http.Request) {
 	log.Logger.Info("Uint32 PUT endpoint is not implemented yet")
 }
 
@@ -361,7 +371,7 @@ func (s *Service) delKeyHandler(w http.ResponseWriter, req *http.Request) {
 		cmd := storage.Del(key, newCmdResult())
 		if cmd.deleted {
 			w.Header().Add("Deleter", "1")
-			s.writeTransaction(eventDel, cmd.storageType, key)
+			s.writeTransaction(eventDel, cmd.storageType, key, nil)
 			break
 		}
 	}
@@ -478,38 +488,36 @@ func (s *Service) processSavedTransactions() error {
 	var err error
 	var event Event
 
-	events, errors := s.txnLogger.readEvents()
+	eventsChan, errorsChan := s.logger.ReadEvents()
 
 	for {
 		select {
-		case event = <-events:
-			switch event.Type {
-			case eventAdd:
-				cmd := s.storage[event.StorageType].Add(event.Key, newCmdResult(event.Val))
+		case event = <-eventsChan:
+			switch event.t {
+			case eventPut:
+				cmd := s.storage[event.storageType].Put(event.key, newCmdResult(event.value))
 				err = cmd.err
 
 			case eventGet:
-				// Get events don't modify the storage anyhow,
-				// so probably we don't need to store them anywhere
-				cmd := s.storage[event.StorageType].Get(event.Key, newCmdResult())
+				cmd := s.storage[event.storageType].Get(event.key, newCmdResult())
 				err = cmd.err
 
 			case eventDel:
-				cmd := s.storage[event.StorageType].Del(event.Key, newCmdResult())
+				cmd := s.storage[event.storageType].Del(event.key, newCmdResult())
 				err = cmd.err
 
 			case eventIncr:
-				intStorage := s.storage[event.StorageType].(*IntStorage)
-				cmd := intStorage.IncrBy(event.Key, newCmdResult())
+				intStorage := s.storage[event.storageType].(*IntStorage)
+				cmd := intStorage.IncrBy(event.key, newCmdResult())
 				err = cmd.err
 
 			case eventIncrBy:
-				intStorage := s.storage[event.StorageType].(*IntStorage)
-				cmd := intStorage.Incr(event.Key, newCmdResult(event.Val))
+				intStorage := s.storage[event.storageType].(*IntStorage)
+				cmd := intStorage.Incr(event.key, newCmdResult(event.value))
 				err = cmd.err
 			}
 
-		case err = <-errors:
+		case err = <-errorsChan:
 			if err != io.EOF {
 				return err
 			}
@@ -520,36 +528,38 @@ func (s *Service) processSavedTransactions() error {
 			return err
 		}
 
-		log.Logger.Info("Read %s, id %d, key %s, storage %s",
-			event.Type.toStr(),
-			event.Id,
-			event.Key,
-			event.StorageType.toStr(),
-		)
+		log.Logger.Info("Saved event: Event{id: %d, t: %s, key: %s, value: %v, timestamp: %s}",
+			event.id, event.t, event.key, event.value, event.timestamp.Format(time.DateTime))
 
 		event = Event{}
 	}
 }
 
-func (s *Service) writeTransaction(evenType EventType, storageType StorageType, key string, values ...interface{}) {
+func (s *Service) writeTransaction(event EventType, storage StorageType, key string, value interface{}) {
 	if !s.settings.TransactionsDisabled {
-		s.writeTransaction(eventGet, storageTypeString, key)
+		s.logger.WriteTransaction(event, storage, key, value)
 	}
 }
 
 func NewService(settings *ServiceSettings) *Service {
-	var txnLogger TansactionLogger
+	var logger TansactionLogger
 	var err error
 
 	switch settings.TxnLoggerType {
 	case TxnLoggerTypeFile:
-		txnLogger, err = newFileTransactionsLogger(settings.TxnFilePath)
+		logger, err = newFileTransactionsLogger(settings.TxnFilePath)
 		if err != nil {
 			log.Logger.Fatal("Failed to init file transaction logger %v", err)
 		}
 
 	case TxnLoggerTypeDB:
-		txnLogger, err = newDBTransactionLogger()
+		logger, err = newDBTransactionLogger(PostgresSettings{
+			host:     "localhost",
+			port:     5432,
+			dbName:   "postgres", // Name of the database where all the tables will be created, postgres by default
+			userName: "postgres",
+			userPwd:  "nastish",
+		})
 		if err != nil {
 			log.Logger.Fatal("Failed to init DB transaction logger %v", err)
 		}
@@ -558,20 +568,18 @@ func NewService(settings *ServiceSettings) *Service {
 	// https://stackoverflow.com/questions/39320025/how-to-stop-http-listenandserve
 	service := &Service{
 		Server: &http.Server{
-			Addr:         settings.Endpoint,
-			ReadTimeout:  5 * time.Second,
-			WriteTimeout: 5 * time.Second,
+			Addr: settings.Endpoint,
 		},
 		settings:    settings,
 		rpcHandlers: make([]*RPCHandler, 0),
 		storage:     make(map[StorageType]Storage),
-		txnLogger:   txnLogger,
+		logger:      logger,
 	}
 
-	service.storage[storageTypeInt] = newIntStorage()
-	service.storage[storageTypeFloat] = newFloatStorage()
-	service.storage[storageTypeString] = newStrStorage()
-	service.storage[storageTypeMap] = newMapStorage()
+	service.storage[storageInt] = newIntStorage()
+	service.storage[storageFloat] = newFloatStorage()
+	service.storage[storageString] = newStrStorage()
+	service.storage[storageMap] = newMapStorage()
 
 	// NOTE: This has to be executed after both transaction logger AND the storage is initialized
 	if err := service.processSavedTransactions(); err != nil {
@@ -593,18 +601,14 @@ func (s *Service) Run() {
 
 	s.running = true
 
-	waitForPendingEvents := make(chan int, 1)
-	shutdownContext, cancel := context.WithCancel(context.Background())
-
+	shutdownCtx, cancel := context.WithCancel(context.Background())
 	defer func() {
 		cancel()
-		<-waitForPendingEvents
+		s.logger.WaitForPendingTransactions()
 	}()
 
-	go func() {
-		s.txnLogger.processTransactions(shutdownContext)
-		waitForPendingEvents <- 1
-	}()
+	// This goroutine won't be leaked
+	go s.logger.ProcessTransactions(shutdownCtx)
 
 	router := mux.NewRouter().StrictSlash(true)
 	// router.Path()
@@ -615,37 +619,61 @@ func (s *Service) Run() {
 		subrouter.Path("/" + hd.funcName).HandlerFunc(hd.cb).Methods(hd.method)
 	}
 
-	subrouter.Path("/mapadd/{key:[0-9A-Za-z_]+}").HandlerFunc(s.mapAddHandler).Methods("PUT")
-	subrouter.Path("/mapget/{key:[0-9A-Za-z_]+}").HandlerFunc(s.mapGetHandler).Methods("GET")
-	subrouter.Path("/mapdel/{key:[0-9A-Za-z_]+}").HandlerFunc(s.mapDeleteHandler).Methods("DELETE")
+	subrouter.Path("/map-put/{key:[0-9A-Za-z_]+}").HandlerFunc(s.mapPutHandler).Methods("PUT")
+	subrouter.Path("/map-get/{key:[0-9A-Za-z_]+}").HandlerFunc(s.mapGetHandler).Methods("GET")
+	subrouter.Path("/map-del/{key:[0-9A-Za-z_]+}").HandlerFunc(s.mapDeleteHandler).Methods("DELETE")
 
-	subrouter.Path("/stradd/{key:[0-9A-Za-z_]+}").HandlerFunc(s.stringAddHandler).Methods("PUT")
-	subrouter.Path("/strget/{key:[0-9A-Za-z_]+}").HandlerFunc(s.stringGetHandler).Methods("GET")
-	subrouter.Path("/strdel/{key:[0-9A-Za-z_]+}").HandlerFunc(s.stringDeleteHandler).Methods("DELETE")
+	subrouter.Path("/str-put/{key:[0-9A-Za-z_]+}").HandlerFunc(s.stringPutHandler).Methods("PUT")
+	subrouter.Path("/str-get/{key:[0-9A-Za-z_]+}").HandlerFunc(s.stringGetHandler).Methods("GET")
+	subrouter.Path("/str-del/{key:[0-9A-Za-z_]+}").HandlerFunc(s.stringDeleteHandler).Methods("DELETE")
 
-	subrouter.Path("/intadd/{key:[0-9A-Za-z_]+}").HandlerFunc(s.intAddHandler).Methods("PUT")
-	subrouter.Path("/intget/{key:[0-9A-Za-z_]+}").HandlerFunc(s.intGetHandler).Methods("GET")
-	subrouter.Path("/intdel/{key:[0-9A-Za-z_]+}").HandlerFunc(s.intDeleteHandler).Methods("DELETE")
-	subrouter.Path("/intincr/{key:[0-9A-Za-z_]+}").HandlerFunc(s.intIncrHandler).Methods("PUT")
-	subrouter.Path("/intincrby/{key:[0-9A-Za-z_]+}").HandlerFunc(s.intIncrByHandler).Methods("PUT")
+	subrouter.Path("/int-put/{key:[0-9A-Za-z_]+}").HandlerFunc(s.intPutHandler).Methods("PUT")
+	subrouter.Path("/int-get/{key:[0-9A-Za-z_]+}").HandlerFunc(s.intGetHandler).Methods("GET")
+	subrouter.Path("/int-del/{key:[0-9A-Za-z_]+}").HandlerFunc(s.intDeleteHandler).Methods("DELETE")
+	subrouter.Path("/int-incr/{key:[0-9A-Za-z_]+}").HandlerFunc(s.intIncrHandler).Methods("PUT")
+	subrouter.Path("/int-incrby/{key:[0-9A-Za-z_]+}").HandlerFunc(s.intIncrByHandler).Methods("PUT")
 
-	subrouter.Path("/floatadd/{key:[0-9A-Za-z_]+}").HandlerFunc(s.floatAddHandler).Methods("PUT")
-	subrouter.Path("/floatget/{key:[0-9A-Za-z_]+}").HandlerFunc(s.floatGetHandler).Methods("GET")
-	subrouter.Path("/floatdel/{key:[0-9A-Za-z_]+}").HandlerFunc(s.floatDeleteHandler).Methods("DELETE")
+	subrouter.Path("/float-put/{key:[0-9A-Za-z_]+}").HandlerFunc(s.floatPutHandler).Methods("PUT")
+	subrouter.Path("/float-get/{key:[0-9A-Za-z_]+}").HandlerFunc(s.floatGetHandler).Methods("GET")
+	subrouter.Path("/float-del/{key:[0-9A-Za-z_]+}").HandlerFunc(s.floatDeleteHandler).Methods("DELETE")
 
-	subrouter.Path("/uintadd/{key:[0-9A-Za-z_]+}").HandlerFunc(s.uintAddHandler).Methods("PUT")
-	subrouter.Path("/uintadd/{key:[0-9A-Za-z_]+}").HandlerFunc(s.uintGetHandler).Methods("GET")
-	subrouter.Path("/uintadd/{key:[0-9A-Za-z_]+}").HandlerFunc(s.uintDelHandler).Methods("DELETE")
+	subrouter.Path("/uint-put/{key:[0-9A-Za-z_]+}").HandlerFunc(s.uintPutHandler).Methods("PUT")
+	subrouter.Path("/uint-add/{key:[0-9A-Za-z_]+}").HandlerFunc(s.uintGetHandler).Methods("GET")
+	subrouter.Path("/uint-del/{key:[0-9A-Za-z_]+}").HandlerFunc(s.uintDelHandler).Methods("DELETE")
+
+	triggerShutdown := make(chan bool)
+	shutdownCompleted := make(chan bool)
+	go func() {
+		<-triggerShutdown
+		// When Shutdown is called, [Serve], [ListenAndServe], and [ListenAndServeTLS] immediately return [ErrServerClosed].
+		// Make sure the program doesn't exit and waits instead for Shutdown to return.
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := s.Server.Shutdown(ctx); err != nil {
+			if err != context.DeadlineExceeded {
+				log.Logger.Error("Failed to shutdown the server %v", err)
+			}
+		}
+		close(shutdownCompleted)
+	}()
 
 	// Endpoint to delete a key from any type of storage
 	subrouter.Path("/del/{key:[0-9A-Za-z_]+}").HandlerFunc(s.delKeyHandler).Methods("DELETE")
+
+	subrouter.Path("/kill").HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		logOnEndpointHit(req.RequestURI, req.Method, req.RemoteAddr)
+		w.WriteHeader(http.StatusOK)
+		close(triggerShutdown)
+	}).Methods("POST")
 
 	s.Server.Handler = router
 
 	log.Logger.Info("%s:%s service is running %s", info.ServiceName(), info.ServiceVersion(), s.settings.Endpoint)
 	if err := s.Server.ListenAndServe(); err != http.ErrServerClosed {
 		log.Logger.Error("Server terminated abnormally %v", err)
-		return
+	} else {
+		log.Logger.Info("Server was closed gracefully")
 	}
-	log.Logger.Info("Server was closed gracefully")
+
+	<-shutdownCompleted
 }

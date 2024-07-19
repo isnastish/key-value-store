@@ -4,54 +4,27 @@ import (
 	"time"
 )
 
-type EventType int
-
 const maxEventCount = ^uint64(0)
 
+type EventType string
+
+// NOTE: This might be slow when we have a lot of events,
+// thus the same amount of string comparison has to be done. So, replacing it with integers,
+// would definitely speed up the process, but we would still have to make lookups
+// every time we scan throw rows in a database containing events.
 const (
-	_ EventType = iota
-	eventAdd
-	eventGet
-	eventDel
-	eventIncr
-	eventIncrBy
+	eventPut    EventType = "put"
+	eventGet    EventType = "get"
+	eventDel    EventType = "delete"
+	eventIncr   EventType = "incr"
+	eventIncrBy EventType = "incrby"
 )
 
-func (e EventType) toStr() string {
-	switch e {
-	case eventAdd:
-		return "EventAdd"
-	case eventGet:
-		return "EventGet"
-	case eventDel:
-		return "EventDel"
-	case eventIncr:
-		return "EventIncr"
-	case eventIncrBy:
-		return "EventIncrBy"
-	}
-	return "UnknownEvent"
-}
-
-func (e StorageType) toStr() string {
-	switch e {
-	case storageTypeInt:
-		return "IntStorage"
-	case storageTypeFloat:
-		return "FloatStorage"
-	case storageTypeString:
-		return "StringStorage"
-	case storageTypeMap:
-		return "MapStorage"
-	}
-	return "UnknownStorage"
-}
-
 type Event struct {
-	StorageType StorageType
-	Id          uint64
-	Type        EventType
-	Key         string
-	Val         interface{}
-	Timestamp   time.Time
+	storageType StorageType
+	id          uint64
+	t           EventType
+	key         string
+	value       interface{}
+	timestamp   time.Time
 }

@@ -16,36 +16,30 @@ import (
 	"github.com/isnastish/kvs/pkg/serviceinfo"
 )
 
-// TODO: Figure out how to pipe all the requests that modify the storage into one
-//
-
 const (
-	// All the entries in this table should be unique,
-	// since their values are used to assign callbacks to a command's callback table
-	// otherwise hash collisions are not avoided
-	cmdIntAdd    = "intadd"
-	cmdIntGet    = "intget"
-	cmdIntDel    = "intdel"
-	cmdIntIncr   = "intincr"
-	cmdIntIncrBy = "intincrby"
-	cmdF32Add    = "floatadd"
-	cmdF32Get    = "floatget"
-	cmdF32Del    = "floatdel"
-	cmdStrAdd    = "stradd"
-	cmdStrGet    = "strget"
-	cmdStrDel    = "strdel"
-	cmdMapAdd    = "mapadd"
-	cmdMapGet    = "mapget"
-	cmdMapDel    = "mapdel"
-	cmdUintAdd   = "uintadd"
-	cmdUintGet   = "uintget"
-	cmdUintDel   = "uintdel"
-	cmdDel       = "del"
+	cmdIntAdd    = "int-put"
+	cmdIntGet    = "int-get"
+	cmdIntDel    = "int-del"
+	cmdIntIncr   = "int-incr"
+	cmdIntIncrBy = "int-incrby"
+	cmdF32Add    = "float-put"
+	cmdF32Get    = "float-get"
+	cmdF32Del    = "float-del"
+	cmdStrAdd    = "str-put"
+	cmdStrGet    = "str-get"
+	cmdStrDel    = "str-del"
+	cmdMapAdd    = "map-put"
+	cmdMapGet    = "map-get"
+	cmdMapDel    = "map-del"
+	cmdUintAdd   = "uint-put"
+	cmdUintGet   = "uint-get"
+	cmdUintDel   = "uint-del"
 
+	cmdDel   = "del"
 	cmdEcho  = "echo"
 	cmdHello = "hello"
 	cmdFibo  = "fibo"
-	// cmdKill  = "kill" // NOTE: Kill command is not implemented yet
+	cmdKill  = "kill"
 )
 
 type IntCmdCallback func(c *Client, ctx context.Context, cmd *IntCmd) *IntCmd
@@ -116,6 +110,15 @@ type CmdTable struct {
 	boolCbTable map[string]BoolCmdCallback
 }
 
+type Batch struct {
+	queue []string // string pairs
+	// key-value queue
+}
+
+func (b *Batch) Exec() {
+	// make an actual http request here
+}
+
 var cmdCallbacksTable *CmdTable
 
 func newCmdGroup() *CmdTable {
@@ -152,7 +155,7 @@ func init() {
 	cmdCallbacksTable.boolCbTable[cmdMapDel] = mapDelCommand
 	cmdCallbacksTable.boolCbTable[cmdF32Del] = f32DelCommand
 	// callback for killing the server
-	// cmdCallbacksTable.boolCbTable[cmdKill] = killCommand
+	cmdCallbacksTable.boolCbTable[cmdKill] = killCommand
 	// del a key from any type of storage
 	cmdCallbacksTable.boolCbTable[cmdDel] = delCommand
 
@@ -261,13 +264,13 @@ func (c *Client) Fibo(ctx context.Context, n int) *IntCmd {
 	return cmd
 }
 
-// func (c *Client) Kill(ctx context.Context) *BoolCmd {
-// 	args := make([]interface{}, 1)
-// 	args[0] = cmdKill
-// 	cmd := newBoolCmd(args...)
-// 	cmdCallbacksTable.boolCbTable[cmdKill](c, ctx, cmd)
-// 	return cmd
-// }
+func (c *Client) Kill(ctx context.Context) *BoolCmd {
+	args := make([]interface{}, 1)
+	args[0] = cmdKill
+	cmd := newBoolCmd(args...)
+	cmdCallbacksTable.boolCbTable[cmdKill](c, ctx, cmd)
+	return cmd
+}
 
 func (c *Client) Del(ctx context.Context, key string) *BoolCmd {
 	cmd := newBoolCmd(cmdDel, key)
@@ -417,6 +420,7 @@ func fiboCommand(client *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
 	query := url.Query()
 	query.Add("n", strconv.Itoa(cmd.args[1].(int)))
 	url.RawQuery = query.Encode()
+	log.Logger.Info("Query URL: %s", url.String())
 	r := client.httpRequest(ctx, http.MethodPost, url, nil, nil)
 	cmd.httpStatus = r.httpStatus
 	if r.err != nil {
@@ -426,12 +430,16 @@ func fiboCommand(client *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
 	return cmd
 }
 
-// func killCommand(client *Client, ctx context.Context, cmd *BoolCmd) *BoolCmd {
-// 	url := client.baseURL.JoinPath(cmd.args[0].(string))
-// 	res := performHttpRequest(client, ctx, http.MethodPost, url.String(), nil)
-// 	cmd.cmdStatus = res.cmdStatus
-// 	return cmd
-// }
+func killCommand(client *Client, ctx context.Context, cmd *BoolCmd) *BoolCmd {
+	url := client.baseURL.JoinPath(cmd.args[0].(string))
+	r := client.httpRequest(ctx, http.MethodPost, url, nil, nil)
+	cmd.httpStatus = r.httpStatus
+	if r.err != nil {
+		return cmd
+	}
+	cmd.result = (r.statusCode == 200)
+	return cmd
+}
 
 func delCommand(client *Client, ctx context.Context, cmd *BoolCmd) *BoolCmd {
 	url := client.baseURL.JoinPath(cmd.args[0].(string)).JoinPath(cmd.args[1].(string))

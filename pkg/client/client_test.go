@@ -15,7 +15,7 @@ import (
 	_ "go.uber.org/goleak"
 
 	"github.com/isnastish/kvs/pkg/log"
-	"github.com/isnastish/kvs/pkg/testing"
+	"github.com/isnastish/kvs/pkg/testsetup"
 )
 
 var endpoint = "127.0.0.1:8080"
@@ -57,12 +57,12 @@ func TestMain(m *testing.M) {
 
 	defer func() {
 		if kill {
-			testutil.KillKVSServiceContainer()
+			testsetup.KillKVSServiceContainer()
 		}
 		os.Exit(status)
 	}()
 
-	kill, err := testutil.StartKVSServiceContainer()
+	kill, err := testsetup.StartKVSServiceContainer()
 	if err != nil {
 		log.Logger.Error("Failed to start docker container %v", err)
 		return
@@ -85,8 +85,18 @@ func TestHello(t *testing.T) {
 	client := NewClient(&settings)
 	res := client.Hello(context.Background())
 	assert.True(t, res.Error() == nil)
-	log.Logger.Info("Result %s", res.Result())
 	assert.True(t, strings.Contains(res.Result(), "kvs"))
+}
+
+func TestKillService(t *testing.T) {
+	// defer goleak.VerifyNone(t)
+	settings := Settings{Endpoint: endpoint, RetriesCount: 3}
+	client := NewClient(&settings)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	res := client.Kill(ctx)
+	assert.True(t, res.Error() == nil)
+	assert.Equal(t, 200, res.statusCode)
 }
 
 func TestFibo(t *testing.T) {
@@ -250,12 +260,12 @@ func TestRetries(t *testing.T) {
 	// NOTE: This test doesn't utilize the common docker container running the KVS service
 	// It uses a different concept, mock server, which is executed in a separate goroutine.
 	// defer goleak.VerifyNone(t)
-	handlerHitCount := 0
+	hitCount := 0
 	settings := Settings{Endpoint: "127.0.0.1:6060", RetriesCount: 3}
-	server := testutil.NewMockServer(settings.Endpoint)
+	server := testsetup.NewMockServer(settings.Endpoint)
 	server.BindHandler("/echo", http.MethodPost, func(w http.ResponseWriter, req *http.Request) {
 		log.Logger.Info("Endpoint %s, method %s, remoteAddr %s", req.RequestURI, req.Method, req.RemoteAddr)
-		if handlerHitCount == (settings.RetriesCount - 1) {
+		if hitCount == (settings.RetriesCount - 1) {
 			bytes, _ := io.ReadAll(req.Body)
 			defer req.Body.Close()
 			res := echo(string(bytes))
@@ -266,7 +276,7 @@ func TestRetries(t *testing.T) {
 			return
 		}
 		w.WriteHeader(http.StatusTooEarly)
-		handlerHitCount++
+		hitCount++
 	})
 
 	server.Start()
@@ -286,7 +296,7 @@ func TestRetries(t *testing.T) {
 func TestContextDeadlineOnRetries(t *testing.T) {
 	// defer goleak.VerifyNone(t)
 	settings := Settings{Endpoint: "127.0.0.1:6060", RetriesCount: 5}
-	server := testutil.NewMockServer(settings.Endpoint)
+	server := testsetup.NewMockServer(settings.Endpoint)
 	server.BindHandler("/echo", http.MethodPost, func(w http.ResponseWriter, req *http.Request) {
 		// http://..../path?status=http.StatusTooEarly
 		log.Logger.Info("Endpoint %s, method %s, remoteAddr %s", req.RequestURI, req.Method, req.RemoteAddr)

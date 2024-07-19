@@ -14,7 +14,7 @@ func main() {
 	flag.StringVar(&settings.CertPemFile, "certpem", "cert.pem", "File containing server certificate")
 	flag.StringVar(&settings.KeyPemFile, "keypem", "key.pem", "File containing client certificate")
 	flag.StringVar(&settings.TxnFilePath, "transaction_file", "transactions.bin", "Path to transaction log file if file transaction logging selected")
-	flag.BoolVar(&settings.TransactionsDisabled, "disable_transactions", true, "Disable transaction logging (by default disabled)")
+	flag.BoolVar(&settings.TransactionsDisabled, "disable_transactions", false, "Disable transaction logging (by default disabled)")
 	txnLoggerType := flag.String("transaction_logger_type", "file", "Transaction logger type. Either log transaction to a database or a file (db|file)")
 	logLevel := flag.String("log_level", "DEBUG", "Sets global logging level. Feasible values are: (DEBUG|INFO|WARN|ERROR|FATAL|PANIC|DISABLED)")
 
@@ -30,6 +30,9 @@ func main() {
 	default:
 		log.Logger.Fatal("Invalid TransactionLogger type %s", *txnLoggerType)
 	}
+
+	// NOTE: Use postgres database for transaction logging for now
+	settings.TxnLoggerType = kvs.TxnLoggerTypeDB
 
 	service := kvs.NewService(&settings)
 	service.Run()

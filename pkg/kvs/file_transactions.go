@@ -45,21 +45,15 @@ func newFileTransactionsLogger(filePath string) (*FileTransactionLogger, error) 
 	}, nil
 }
 
-func (l *FileTransactionLogger) writeTransaction(eventType EventType, storageType StorageType, key string, values ...interface{}) {
-	// NOTE: Intentionally not specifying id, since it will be accessed by multiple goroutines
-	var val interface{}
-	if len(values) > 0 {
-		val = values[0]
-	}
-	l.events <- Event{
-		Type:        eventType,
-		StorageType: storageType,
-		Key:         key,
-		Val:         val,
-		Timestamp:   time.Now()}
+func (l *FileTransactionLogger) WaitForPendingTransactions() {
+
 }
 
-func (l *FileTransactionLogger) processTransactions(shutdownContext context.Context) {
+func (l *FileTransactionLogger) WriteTransaction(eventType EventType, storage StorageType, key string, value interface{}) {
+	l.events <- Event{storageType: storage, t: eventType, key: key, value: value, timestamp: time.Now()}
+}
+
+func (l *FileTransactionLogger) ProcessTransactions(shutdownContext context.Context) {
 	defer l.file.Close()
 
 	events := make(chan Event, 16)
@@ -80,18 +74,16 @@ func (l *FileTransactionLogger) processTransactions(shutdownContext context.Cont
 	for {
 		select {
 		case event := <-events:
-			event.Id = l.id
+			event.id = l.id
 			if !encodeEvent(&event) {
 				return
 			}
 			l.id++
 
-			log.Logger.Info("Wrote %s, id %d, storage %s, time %s",
-				event.Type.toStr(),
-				event.Id,
-				event.StorageType.toStr(),
-				event.Timestamp.Format(time.TimeOnly),
-			)
+			// NOTE: Since we encoding and decoding the data when doing file transactions,
+			// we don't need to have string representations for storage types, even for logging
+			log.Logger.Info("Wrote event: Event{id: %d, t: %s, key: %s, value: %v, timestamp: %v}",
+				event.id, event.t, event.key, event.value, event.timestamp)
 
 		case <-shutdownContext.Done():
 			log.Logger.Info("Finishing writing pending events")
@@ -99,7 +91,7 @@ func (l *FileTransactionLogger) processTransactions(shutdownContext context.Cont
 			// otherwise the events might get lost, which will be imposible to replay them.
 			if len(events) != 0 {
 				for event := range events {
-					event.Id = l.id
+					event.id = l.id
 					if !encodeEvent(&event) {
 						return
 					}
@@ -111,7 +103,7 @@ func (l *FileTransactionLogger) processTransactions(shutdownContext context.Cont
 	}
 }
 
-func (l *FileTransactionLogger) readEvents() (<-chan Event, <-chan error) {
+func (l *FileTransactionLogger) ReadEvents() (<-chan Event, <-chan error) {
 	events := make(chan Event)
 	errors := make(chan error, 1)
 
