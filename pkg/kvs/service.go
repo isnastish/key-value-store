@@ -308,6 +308,10 @@ func (s *Service) floatGetHandler(w http.ResponseWriter, req *http.Request) {
 }
 
 func (s *Service) floatPutHandler(w http.ResponseWriter, req *http.Request) {
+	// If the value with the given key already exists,
+	// and the value is the same, we shouldn't make any transactions,
+	// because it would be a duplicate and only exhaust the memory.
+	// We can introduce an update transaction for example as well.
 	logOnEndpointHit(req.RequestURI, req.Method, req.RemoteAddr)
 
 	key := mux.Vars(req)["key"]
@@ -322,12 +326,12 @@ func (s *Service) floatPutHandler(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	cmd := s.storage[storageFloat].Put(key, newCmdResult(val))
+	cmd := s.storage[storageFloat].Put(key, newCmdResult(float32(val)))
 	if cmd.err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.writeTransaction(eventPut, storageFloat, key, val)
+	s.writeTransaction(eventPut, storageFloat, key, float32(val))
 	w.WriteHeader(http.StatusOK)
 }
 

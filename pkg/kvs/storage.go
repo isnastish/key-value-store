@@ -235,7 +235,7 @@ func (s *FloatStorage) Put(hashKey string, cmd *CmdResult) *CmdResult {
 	s.Lock()
 	// Consider the precision in the future. Maybe we have to suply the precision
 	// together with the value itself
-	s.data[hashKey] = float32(cmd.args[0].(float64))
+	s.data[hashKey] = float32(cmd.args[0].(float32))
 	s.Unlock()
 	cmd.storageType = storageFloat
 	return cmd
