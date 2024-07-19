@@ -387,7 +387,58 @@ func (l *PostgresTransactionLogger) ProcessTransactions(ctx context.Context) {
 	}()
 }
 
-func selectEventsFromTable(dbconn *pgxpool.Conn, storage StorageType, txnTable string, keyTable string, eventsChan chan<- Event, errorsChan chan<- error) error {
+func selectEventsFromTable(dbconn *pgxpool.Conn, storage StorageType, query, txnTable, keyTable string, eventsChan chan<- Event) error {
+	// We can retrieve all the events in two ways here.
+	// The first one is to get all the ids first from `keys` table.
+	// Then use `inner join` to get all transactions with the specified id in a form of ("type", "key", "value")
+	//
+	// Second approach is faster and more robust, but for the sake of practice, I will go with joins.
+	// Get all pairs ("id", "key").
+	// Iterate over every id and retrieve all transactions for it.
+	// Since we know the key already, we would have to create events manually
+	var keyIds []int32
+	var err error
+
+	timeout := 15 * time.Second
+
+	{
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+
+		rows, _ := dbconn.Query(ctx, fmt.Sprintf(`select "id" from "%s";`, keyTable))
+		keyIds, err = pgx.CollectRows(rows, pgx.RowTo[int32])
+		if err != nil {
+			return fmt.Errorf("failed to select rows for %s table, %w", keyTable, err)
+		}
+	}
+
+	// Sending all the queries in a single batch.
+	batch := &pgx.Batch{}
+	for _, id := range keyIds {
+		batch.Queue(query, id).Query(func(rows pgx.Rows) error {
+			events, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Event, error) {
+				event := Event{storageType: storage}
+				err := row.Scan(&event.t, &event.key, &event.value, &event.timestamp)
+				return event, err
+			})
+			if err != nil {
+				log.Logger.Error("Error occured when reading events from %s table, %v", txnTable, err)
+				return err
+			}
+			for _, event := range events {
+				eventsChan <- event
+			}
+			return nil
+		})
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	err = dbconn.SendBatch(ctx, batch).Close()
+	if err != nil {
+		return fmt.Errorf("failed to select events from %s table, %w", txnTable, err)
+	}
+
 	return nil
 }
 
@@ -406,87 +457,36 @@ func (l *PostgresTransactionLogger) ReadEvents() (<-chan Event, <-chan error) {
 		}
 		defer dbconn.Release()
 
-		{
-			// We can retrieve all the events in two ways here.
-			// The first one is to get all the ids first from `keys` table.
-			// Then use `inner join` to get all transactions with the specified id in a form of ("type", "key", "value")
-			//
-			// Second approach is faster and more robust, but for the sake of practice, I will go with joins.
-			// Get all pairs ("id", "key").
-			// Iterate over every id and retrieve all transactions for it.
-			// Since we know the key already, we would have to create events manually
-			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-			defer cancel()
+		// Passing the query string directly to make the code more explicit
+		query := `select "type", "key", "value", "timestamp" from "int_transactions"
+			join "int_keys" on "int_keys"."id" = "int_transactions"."key_id"
+			where "int_keys"."id" = ($1);`
 
-			rows, _ := dbconn.Query(ctx, `select "id" from "int_keys";`)
-			keyIds, err := pgx.CollectRows(rows, pgx.RowTo[int32])
-			if err != nil {
-				errorsChan <- fmt.Errorf("failed to select rows for %s table, %w", l.intKeyTable, err)
-				return
-			}
-
-			query := `select "type", "key", "value", "timestamp" from "int_transactions"
-				join "int_keys" on "int_keys"."id" = "int_transactions"."key_id"
-				where "int_keys"."id" = ($1);`
-
-			// NOTE: Sending all the queries in a single batch doesn't work here for some reason,
-			// we get an error, no rows in a result. Maybe I have to investigate more in depth.
-			batch := &pgx.Batch{}
-			for _, id := range keyIds {
-				batch.Queue(query, id).Query(func(rows pgx.Rows) error {
-					events, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Event, error) {
-						event := Event{storageType: storageInt}
-						err := row.Scan(&event.t, &event.key, &event.value, &event.timestamp)
-						return event, err
-					})
-					if err != nil {
-						log.Logger.Error("Error occured when reading events from %s table, %v", l.intTxnTable, err)
-						return err
-					}
-					for _, event := range events {
-						eventsChan <- event
-					}
-					return nil
-				})
-			}
-			err = dbconn.SendBatch(context.Background(), batch).Close()
-			if err != nil {
-				errorsChan <- fmt.Errorf("failed to select events from %s table, %w", l.intTxnTable, err)
-				return
-			}
+		if err := selectEventsFromTable(dbconn, storageInt, query, l.intTxnTable, l.intKeyTable, eventsChan); err != nil {
+			errorsChan <- err
+			return
 		}
 
-		// if err := selectEventsFromTable(dbconn, storageInt, l.intTxnTable, eventsChan, errorsChan); err != nil {
-		// 	return
-		// }
+		// do the type cast from `numeric` type to real(float32)
+		query = `select "type", "key", cast("value" as real), "timestamp" from "float_transactions" 
+			join "float_keys" on "float_keys"."id" = "float_transactions"."key_id" 
+			where "float_keys"."id" = ($1);`
 
-		// if err := selectEventsFromTable(dbconn, storageFloat, l.floatTxnTable, eventsChan, errorsChan); err != nil {
-		// 	return
-		// }
+		if err := selectEventsFromTable(dbconn, storageFloat, query, l.floatTxnTable, l.floatKeyTable, eventsChan); err != nil {
+			errorsChan <- err
+			return
+		}
 
-		// if err := selectEventsFromTable(dbconn, storageString, l.strTxnTable, eventsChan, errorsChan); err != nil {
-		// 	return
-		// }
+		query = `select "type", "key", "value", "timestamp" from "str_transactions"
+			join "str_keys" on "str_keys"."id" = "str_transactions"."key_id" 
+			where "str_keys"."id" = ($1);`
 
-		// {
-		// 	type HashBundle struct {
-		// 		Id   int32
-		// 		Hash string
-		// 	}
+		if err := selectEventsFromTable(dbconn, storageString, query, l.strTxnTable, l.strKeyTable, eventsChan); err != nil {
+			errorsChan <- err
+			return
+		}
 
-		// 	rows, _ := dbconn.Query(context.Background(), fmt.Sprintf(`select ("id", "key") from "%s";`, l.mapHashTable))
-		// 	hashes, err := pgx.CollectRows(rows, pgx.RowToStructByPos[HashBundle])
-		// 	if err != nil {
-		// 		errorsChan <- fmt.Errorf("failed to select map hashes %w", err)
-		// 		return
-		// 	}
-
-		// 	_ = hashes
-		// 	// batch := &pgx.Batch{}
-		// 	// for b := range hashes {
-		// 	// 	batch.Queue(`select ("event") from "map_storage" where "hash_id" = ($1);`, id)
-		// 	// }
-		// }
+		// TODO: Implement a query to get hash maps
 	}()
 
 	return eventsChan, errorsChan
