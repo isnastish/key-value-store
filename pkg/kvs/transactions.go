@@ -4,20 +4,18 @@ import (
 	"context"
 )
 
-// Figure out whether it's possible to endcode struct which have interface{} fields.
-// Because if we cannot, we would have to create multiple events, for each storage type.
-// But we wouldn't know how to read those events from the file, if they are of different types
-
-type TxnLoggerType int8
+type TxnType string
 
 const (
-	_ TxnLoggerType = iota
-	TxnLoggerTypeDB
-	TxnLoggerTypeFile
+	txnPut    TxnType = "put"
+	txnGet    TxnType = "get"
+	txnDelete TxnType = "delete"
+	txnIncr   TxnType = "incr"
+	txnIncrBy TxnType = "incrby"
 )
 
-type TansactionLogger interface {
-	WriteTransaction(evenType EventType, storageType StorageType, key string, value interface{})
+type TxnLogger interface {
+	WriteTransaction(txnType TxnType, storageType StorageType, key string, value interface{})
 	ProcessTransactions(ctx context.Context)
 	ReadEvents() (<-chan Event, <-chan error)
 	WaitForPendingTransactions()

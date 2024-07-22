@@ -31,11 +31,8 @@ type ServiceSettings struct {
 	KeyPemFile  string
 	Username    string
 	Password    string
-
-	// transactions
-	TxnFilePath          string
-	TransactionsDisabled bool
-	TxnLoggerType
+	TxnDisabled bool
+	TxnLogger
 }
 
 type HandlerCallback func(w http.ResponseWriter, req *http.Request)
@@ -51,7 +48,7 @@ type Service struct {
 	settings    *ServiceSettings
 	rpcHandlers []*RPCHandler
 	storage     map[StorageType]Storage
-	logger      TansactionLogger
+	txnLogger   TxnLogger
 	running     bool
 }
 
@@ -71,7 +68,7 @@ func (s *Service) stringPutHandler(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	s.writeTransaction(eventPut, storageString, key, string(val))
+	s.writeTransaction(txnPut, storageString, key, string(val))
 
 	w.WriteHeader(http.StatusOK)
 }
@@ -86,7 +83,7 @@ func (s *Service) stringGetHandler(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	s.writeTransaction(eventGet, storageString, key, nil)
+	s.writeTransaction(txnGet, storageString, key, nil)
 
 	bytes := []byte(cmd.result.(string))
 	w.Header().Add("Content-Type", "text/plain")
@@ -106,7 +103,7 @@ func (s *Service) stringDeleteHandler(w http.ResponseWriter, req *http.Request) 
 		return
 	}
 
-	s.writeTransaction(eventDel, storageString, key, nil)
+	s.writeTransaction(txnDelete, storageString, key, nil)
 
 	if cmd.deleted {
 		w.Header().Add("Deleted", "1")
@@ -128,6 +125,7 @@ func (s *Service) mapPutHandler(w http.ResponseWriter, req *http.Request) {
 	hashMap := make(map[string]string)
 	err = json.Unmarshal(body, &hashMap)
 	if err != nil {
+		log.Logger.Error("Failed to unmarshal the body in mapPutHandler")
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -136,7 +134,7 @@ func (s *Service) mapPutHandler(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, cmd.err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.writeTransaction(eventPut, storageMap, key, hashMap)
+	s.writeTransaction(txnPut, storageMap, key, hashMap)
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -149,7 +147,7 @@ func (s *Service) mapGetHandler(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, cmd.err.Error(), http.StatusNotFound)
 		return
 	}
-	s.writeTransaction(eventGet, storageMap, key, nil)
+	s.writeTransaction(txnGet, storageMap, key, nil)
 
 	// NOTE: Maybe instead of transferring a stream of bytes, we could send the data
 	// for the map in a json format? The content-type would have to be changed to application/json
@@ -175,7 +173,7 @@ func (s *Service) mapDeleteHandler(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, cmd.err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.writeTransaction(eventDel, storageMap, key, nil)
+	s.writeTransaction(txnDelete, storageMap, key, nil)
 
 	if cmd.deleted {
 		w.Header().Add("Deleted", "1")
@@ -205,7 +203,7 @@ func (s *Service) intPutHandler(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, cmd.err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.writeTransaction(eventPut, storageInt, key, int32(val))
+	s.writeTransaction(txnPut, storageInt, key, int32(val))
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -218,7 +216,7 @@ func (s *Service) intGetHandler(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, cmd.err.Error(), http.StatusNotFound)
 		return
 	}
-	s.writeTransaction(eventGet, storageInt, key, nil)
+	s.writeTransaction(txnGet, storageInt, key, nil)
 
 	w.Header().Add("Conent-Type", "text/plain")
 	w.WriteHeader(http.StatusOK)
@@ -234,7 +232,7 @@ func (s *Service) intDeleteHandler(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, cmd.err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.writeTransaction(eventDel, storageInt, key, nil)
+	s.writeTransaction(txnDelete, storageInt, key, nil)
 
 	if cmd.deleted {
 		w.Header().Add("Deleted", "1")
@@ -252,7 +250,7 @@ func (s *Service) intIncrHandler(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, cmd.err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.writeTransaction(eventIncr, storageInt, key, nil)
+	s.writeTransaction(txnIncr, storageInt, key, nil)
 
 	// response body should contain the preivous value
 	contents := strconv.FormatInt(int64(cmd.result.(int32)), 10)
@@ -283,7 +281,7 @@ func (s *Service) intIncrByHandler(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.writeTransaction(eventIncrBy, storageInt, key, int32(val))
+	s.writeTransaction(txnIncrBy, storageInt, key, int32(val))
 
 	// response should contain the previously inserted value
 	contents := strconv.FormatInt(int64(cmd.result.(int32)), 10)
@@ -302,7 +300,7 @@ func (s *Service) floatGetHandler(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, cmd.err.Error(), http.StatusNotFound)
 		return
 	}
-	s.writeTransaction(eventGet, storageFloat, key, nil)
+	s.writeTransaction(txnGet, storageFloat, key, nil)
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(fmt.Sprintf("%e", cmd.result)))
 }
@@ -331,7 +329,7 @@ func (s *Service) floatPutHandler(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.writeTransaction(eventPut, storageFloat, key, float32(val))
+	s.writeTransaction(txnPut, storageFloat, key, float32(val))
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -347,7 +345,7 @@ func (s *Service) floatDeleteHandler(w http.ResponseWriter, req *http.Request) {
 	if cmd.deleted {
 		w.Header().Add("Deleted", "1")
 	}
-	s.writeTransaction(eventDel, storageFloat, key, nil)
+	s.writeTransaction(txnDelete, storageFloat, key, nil)
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -371,7 +369,7 @@ func (s *Service) delKeyHandler(w http.ResponseWriter, req *http.Request) {
 		cmd := storage.Del(key, newCmdResult())
 		if cmd.deleted {
 			w.Header().Add("Deleter", "1")
-			s.writeTransaction(eventDel, cmd.storageType, key, nil)
+			s.writeTransaction(txnDelete, cmd.storageType, key, nil)
 			break
 		}
 	}
@@ -488,30 +486,30 @@ func (s *Service) processSavedTransactions() error {
 	var err error
 	var event Event
 
-	eventsChan, errorsChan := s.logger.ReadEvents()
+	eventsChan, errorsChan := s.txnLogger.ReadEvents()
 
 	for {
 		select {
 		case event = <-eventsChan:
-			switch event.t {
-			case eventPut:
+			switch event.txnType {
+			case txnPut:
 				cmd := s.storage[event.storageType].Put(event.key, newCmdResult(event.value))
 				err = cmd.err
 
-			case eventGet:
+			case txnGet:
 				cmd := s.storage[event.storageType].Get(event.key, newCmdResult())
 				err = cmd.err
 
-			case eventDel:
+			case txnDelete:
 				cmd := s.storage[event.storageType].Del(event.key, newCmdResult())
 				err = cmd.err
 
-			case eventIncr:
+			case txnIncr:
 				intStorage := s.storage[event.storageType].(*IntStorage)
 				cmd := intStorage.IncrBy(event.key, newCmdResult())
 				err = cmd.err
 
-			case eventIncrBy:
+			case txnIncrBy:
 				intStorage := s.storage[event.storageType].(*IntStorage)
 				cmd := intStorage.Incr(event.key, newCmdResult(event.value))
 				err = cmd.err
@@ -529,42 +527,19 @@ func (s *Service) processSavedTransactions() error {
 		}
 
 		log.Logger.Info("Saved event: Event{id: %d, t: %s, key: %s, value: %v, timestamp: %s}",
-			event.id, event.t, event.key, event.value, event.timestamp.Format(time.DateTime))
+			event.id, event.txnType, event.key, event.value, event.timestamp.Format(time.DateTime))
 
 		event = Event{}
 	}
 }
 
-func (s *Service) writeTransaction(event EventType, storage StorageType, key string, value interface{}) {
-	if !s.settings.TransactionsDisabled {
-		s.logger.WriteTransaction(event, storage, key, value)
+func (s *Service) writeTransaction(txnType TxnType, storage StorageType, key string, value interface{}) {
+	if !s.settings.TxnDisabled {
+		s.txnLogger.WriteTransaction(txnType, storage, key, value)
 	}
 }
 
 func NewService(settings *ServiceSettings) *Service {
-	var logger TansactionLogger
-	var err error
-
-	switch settings.TxnLoggerType {
-	case TxnLoggerTypeFile:
-		logger, err = newFileTransactionsLogger(settings.TxnFilePath)
-		if err != nil {
-			log.Logger.Fatal("Failed to init file transaction logger %v", err)
-		}
-
-	case TxnLoggerTypeDB:
-		logger, err = newDBTransactionLogger(PostgresSettings{
-			host:     "localhost",
-			port:     5432,
-			dbName:   "postgres", // Name of the database where all the tables will be created, postgres by default
-			userName: "postgres",
-			userPwd:  "nastish",
-		})
-		if err != nil {
-			log.Logger.Fatal("Failed to init DB transaction logger %v", err)
-		}
-	}
-
 	// https://stackoverflow.com/questions/39320025/how-to-stop-http-listenandserve
 	service := &Service{
 		Server: &http.Server{
@@ -573,7 +548,7 @@ func NewService(settings *ServiceSettings) *Service {
 		settings:    settings,
 		rpcHandlers: make([]*RPCHandler, 0),
 		storage:     make(map[StorageType]Storage),
-		logger:      logger,
+		txnLogger:   settings.TxnLogger,
 	}
 
 	service.storage[storageInt] = newIntStorage()
@@ -604,11 +579,11 @@ func (s *Service) Run() {
 	shutdownCtx, cancel := context.WithCancel(context.Background())
 	defer func() {
 		cancel()
-		s.logger.WaitForPendingTransactions()
+		s.txnLogger.WaitForPendingTransactions()
 	}()
 
 	// This goroutine won't be leaked
-	go s.logger.ProcessTransactions(shutdownCtx)
+	go s.txnLogger.ProcessTransactions(shutdownCtx)
 
 	router := mux.NewRouter().StrictSlash(true)
 	// router.Path()

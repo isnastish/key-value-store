@@ -15,7 +15,7 @@ import (
 // Package for encoding/decoding data sent over the network (to be explored)
 // https://pkg.go.dev/encoding/gob
 
-type FileTransactionLogger struct {
+type FileTxnLogger struct {
 	id       uint64
 	filePath string
 	file     *os.File
@@ -25,7 +25,7 @@ type FileTransactionLogger struct {
 	dec      *gob.Decoder
 }
 
-func newFileTransactionsLogger(filePath string) (*FileTransactionLogger, error) {
+func NewFileTxnLogger(filePath string) (*FileTxnLogger, error) {
 	gob.Register(map[string]string{})
 
 	// Seek method cannot be used on files created with O_APPEND file,
@@ -37,7 +37,7 @@ func newFileTransactionsLogger(filePath string) (*FileTransactionLogger, error) 
 		return nil, err
 	}
 
-	return &FileTransactionLogger{
+	return &FileTxnLogger{
 		filePath: filePath,
 		file:     file,
 		enc:      gob.NewEncoder(file),
@@ -45,15 +45,15 @@ func newFileTransactionsLogger(filePath string) (*FileTransactionLogger, error) 
 	}, nil
 }
 
-func (l *FileTransactionLogger) WaitForPendingTransactions() {
+func (l *FileTxnLogger) WaitForPendingTransactions() {
 
 }
 
-func (l *FileTransactionLogger) WriteTransaction(eventType EventType, storage StorageType, key string, value interface{}) {
-	l.events <- Event{storageType: storage, t: eventType, key: key, value: value, timestamp: time.Now()}
+func (l *FileTxnLogger) WriteTransaction(txnType TxnType, storage StorageType, key string, value interface{}) {
+	l.events <- Event{storageType: storage, txnType: txnType, key: key, value: value, timestamp: time.Now()}
 }
 
-func (l *FileTransactionLogger) ProcessTransactions(shutdownContext context.Context) {
+func (l *FileTxnLogger) ProcessTransactions(shutdownContext context.Context) {
 	defer l.file.Close()
 
 	events := make(chan Event, 16)
@@ -83,7 +83,7 @@ func (l *FileTransactionLogger) ProcessTransactions(shutdownContext context.Cont
 			// NOTE: Since we encoding and decoding the data when doing file transactions,
 			// we don't need to have string representations for storage types, even for logging
 			log.Logger.Info("Wrote event: Event{id: %d, t: %s, key: %s, value: %v, timestamp: %v}",
-				event.id, event.t, event.key, event.value, event.timestamp)
+				event.id, event.txnType, event.key, event.value, event.timestamp)
 
 		case <-shutdownContext.Done():
 			log.Logger.Info("Finishing writing pending events")
@@ -103,7 +103,7 @@ func (l *FileTransactionLogger) ProcessTransactions(shutdownContext context.Cont
 	}
 }
 
-func (l *FileTransactionLogger) ReadEvents() (<-chan Event, <-chan error) {
+func (l *FileTxnLogger) ReadEvents() (<-chan Event, <-chan error) {
 	events := make(chan Event)
 	errors := make(chan error, 1)
 

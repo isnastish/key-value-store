@@ -20,13 +20,13 @@ var logLevelsMap map[string]zerolog.Level
 
 func init() {
 	logLevelsMap = make(map[string]zerolog.Level)
-	logLevelsMap["DEBUG"] = zerolog.DebugLevel
-	logLevelsMap["INFO"] = zerolog.InfoLevel
-	logLevelsMap["WARN"] = zerolog.WarnLevel
-	logLevelsMap["ERROR"] = zerolog.ErrorLevel
-	logLevelsMap["FATAL"] = zerolog.FatalLevel
-	logLevelsMap["PANIC"] = zerolog.PanicLevel
-	logLevelsMap["DISABLED"] = zerolog.Disabled
+	logLevelsMap["debug"] = zerolog.DebugLevel
+	logLevelsMap["info"] = zerolog.InfoLevel
+	logLevelsMap["warn"] = zerolog.WarnLevel
+	logLevelsMap["error"] = zerolog.ErrorLevel
+	logLevelsMap["fatal"] = zerolog.FatalLevel
+	logLevelsMap["panic"] = zerolog.PanicLevel
+	logLevelsMap["disabled"] = zerolog.Disabled
 }
 
 func SetupGlobalLogLevel(level string) {

@@ -16,15 +16,7 @@ import (
 // We have to clean up all the transactions, otherwise our transaction storage will
 // keep growing and we eventually run out of memory or ids to enumerate the transactions.
 
-type PostgresSettings struct {
-	host     string
-	dbName   string
-	userName string
-	userPwd  string
-	port     int
-}
-
-type PostgresTransactionLogger struct {
+type PostgresTxnLogger struct {
 	eventsChan chan<- Event
 	errorsChan <-chan error
 	dbpool     *pgxpool.Pool
@@ -42,10 +34,8 @@ type PostgresTransactionLogger struct {
 	mapKeyValueTable string
 }
 
-func newDBTransactionLogger(settings PostgresSettings) (*PostgresTransactionLogger, error) {
-	const DATABASE_URL = "postgresql://postgres:nastish@127.0.0.1:5432/postgres?sslmode=disable"
-
-	dbconfig, err := pgxpool.ParseConfig(DATABASE_URL)
+func NewDBTxnLogger(databaseURL string) (*PostgresTxnLogger, error) {
+	dbconfig, err := pgxpool.ParseConfig(databaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build a config %w", err)
 	}
@@ -73,7 +63,7 @@ func newDBTransactionLogger(settings PostgresSettings) (*PostgresTransactionLogg
 		return nil, fmt.Errorf("failed to establish db connection %w", err)
 	}
 
-	logger := &PostgresTransactionLogger{
+	logger := &PostgresTxnLogger{
 		dbpool: dbpool,
 		wg:     sync.WaitGroup{},
 		// keep a list of table names in case we need to change them,
@@ -96,11 +86,11 @@ func newDBTransactionLogger(settings PostgresSettings) (*PostgresTransactionLogg
 	return logger, nil
 }
 
-func (l *PostgresTransactionLogger) WaitForPendingTransactions() {
+func (l *PostgresTxnLogger) WaitForPendingTransactions() {
 	l.wg.Wait()
 }
 
-func (l *PostgresTransactionLogger) dropTable(dbconn *pgxpool.Conn, table string) error {
+func (l *PostgresTxnLogger) dropTable(dbconn *pgxpool.Conn, table string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
@@ -111,7 +101,7 @@ func (l *PostgresTransactionLogger) dropTable(dbconn *pgxpool.Conn, table string
 	return nil
 }
 
-func (l *PostgresTransactionLogger) createTablesIfDontExist() error {
+func (l *PostgresTxnLogger) createTablesIfDontExist() error {
 	timeout := 15 * time.Second
 
 	dbconn, err := l.dbpool.Acquire(context.Background())
@@ -209,44 +199,59 @@ func (l *PostgresTransactionLogger) createTablesIfDontExist() error {
 			return err
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
-		defer cancel()
+		{
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
 
-		query := fmt.Sprintf(`create table if not exists "%s" (
-			"map_id" integer,
-			"key" text not null,
-			"value" text not null,
-			foreign key("map_id") references "%s"("id") on delete cascade);`, l.mapKeyValueTable, l.mapHashTable)
+			// type -> transaction type ('put', 'get', 'delete', ...)
+			// map_id -> id of the hash which refers to a map to be modified (depending on a transaction type)
+			// |---------------------------------|
+			// | id | type | map_id | timestamp  |
+			// |----|------|--------|------------|
+			query := `create table if not exists "map_transactions" (
+				"id" serial primary key,
+				"type" varchar(32) not null check("type" in ('put', 'get', 'delete', 'incr', 'incrby')),
+				"map_id" integer, 
+				"timestampt" timestamp not null default now(),
+				foreign key("map_id") references "map_hashes"("id") on delete cascade);`
 
-		if _, err = dbconn.Exec(ctx, query); err != nil {
-			return fmt.Errorf("failed to create %s table %w", l.mapKeyValueTable, err)
+			if _, err = dbconn.Exec(ctx, query); err != nil {
+				return fmt.Errorf("failed to create map transactions table %w", err)
+			}
 		}
-	}
+		{
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
 
-	{
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
-		defer cancel()
+			// txn_id -> transaction id ('put', 'get', 'delete', etc.)
+			// map_id -> id of key key which holds this map.
+			// |-----------------------------------|
+			// | txn_id |  map_id |  key |  value  |
+			// |--------|---------|------|---------|
+			// |  1     |  12     |"bar" | "foo"   |
+			// |  1     |  12     | "baz"| "bazzz" |
+			query := `create table if not exists "map_key_values" (
+				"txn_id" integer,
+				"map_id" integer,
+				"key" text not null,
+				"value" text not null,
+				foreign key("map_id") references "map_hashes"("id") on delete cascade,
+				foreign key("txn_id") references "map_transactions"("id") on delete cascade);`
 
-		query := fmt.Sprintf(`create table if not exists "%s" (
-			"id" serial primary key,
-			"type" varchar(32) not null check("type" in ('put', 'get', 'delete', 'incr', 'incrby')),
-			"map_id" integer, 
-			"timestampt" timestamp not null default now(),
-			foreign key("map_id") references "%s"("id") on delete cascade);`, l.mapTxnTable, l.mapHashTable)
-
-		if _, err = dbconn.Exec(ctx, query); err != nil {
-			return fmt.Errorf("failed to create map transactions table %w", err)
+			if _, err = dbconn.Exec(ctx, query); err != nil {
+				return fmt.Errorf("failed to create %s table %w", l.mapKeyValueTable, err)
+			}
 		}
 	}
 
 	return nil
 }
 
-func (l *PostgresTransactionLogger) WriteTransaction(eventType EventType, storage StorageType, key string, value interface{}) {
+func (l *PostgresTxnLogger) WriteTransaction(txnType TxnType, storage StorageType, key string, value interface{}) {
 	// NOTE: Timestamp is used for file transactions only.
 	// For Postgre we maintain a inserttime column which is default to now().
 	// So, whenever the transactions is inserted, a timestamp computed automatically.
-	l.eventsChan <- Event{storageType: storage, t: eventType, key: key, value: value}
+	l.eventsChan <- Event{storageType: storage, txnType: txnType, key: key, value: value}
 }
 
 func extractKeyId(dbconn *pgxpool.Conn, table string, event *Event) (int32, error) {
@@ -266,7 +271,7 @@ func extractKeyId(dbconn *pgxpool.Conn, table string, event *Event) (int32, erro
 	return keyId, nil
 }
 
-func (l *PostgresTransactionLogger) insertTransactionIntoDB(dbconn *pgxpool.Conn, event *Event) error {
+func (l *PostgresTxnLogger) insertTransactionIntoDB(dbconn *pgxpool.Conn, event *Event) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
@@ -278,10 +283,10 @@ func (l *PostgresTransactionLogger) insertTransactionIntoDB(dbconn *pgxpool.Conn
 		}
 
 		var value interface{} = nil
-		if event.t == eventPut {
+		if event.txnType == txnPut {
 			value = event.value.(int32)
 		}
-		if _, err = dbconn.Exec(ctx, fmt.Sprintf(`insert into "%s" ("type", "key_id", "value") values ($1, $2, $3);`, l.intTxnTable), event.t, keyId, value); err != nil {
+		if _, err = dbconn.Exec(ctx, fmt.Sprintf(`insert into "%s" ("type", "key_id", "value") values ($1, $2, $3);`, l.intTxnTable), event.txnType, keyId, value); err != nil {
 			return fmt.Errorf("failed to insert into %s table %w", l.intTxnTable, err)
 		}
 
@@ -292,10 +297,10 @@ func (l *PostgresTransactionLogger) insertTransactionIntoDB(dbconn *pgxpool.Conn
 		}
 
 		var value interface{} = nil
-		if event.t == eventPut {
+		if event.txnType == txnPut {
 			value = event.value.(float32)
 		}
-		if _, err = dbconn.Exec(ctx, fmt.Sprintf(`insert into "%s" ("type", "key_id", "value") values ($1, $2, $3);`, l.floatTxnTable), event.t, keyId, value); err != nil {
+		if _, err = dbconn.Exec(ctx, fmt.Sprintf(`insert into "%s" ("type", "key_id", "value") values ($1, $2, $3);`, l.floatTxnTable), event.txnType, keyId, value); err != nil {
 			return fmt.Errorf("failed to insert into %s table %w", l.floatTxnTable, err)
 		}
 
@@ -306,10 +311,10 @@ func (l *PostgresTransactionLogger) insertTransactionIntoDB(dbconn *pgxpool.Conn
 		}
 
 		var value interface{} = nil
-		if event.t == eventPut {
+		if event.txnType == txnPut {
 			value = event.value.(string)
 		}
-		if _, err := dbconn.Exec(ctx, fmt.Sprintf(`insert into "%s" ("type", "key_id", "value") values ($1, $2, $3);`, l.strTxnTable), event.t, keyId, value); err != nil {
+		if _, err := dbconn.Exec(ctx, fmt.Sprintf(`insert into "%s" ("type", "key_id", "value") values ($1, $2, $3);`, l.strTxnTable), event.txnType, keyId, value); err != nil {
 			return fmt.Errorf("failed to insert into %s table %w", l.strTxnTable, err)
 		}
 
@@ -318,17 +323,18 @@ func (l *PostgresTransactionLogger) insertTransactionIntoDB(dbconn *pgxpool.Conn
 		if err != nil {
 			return err
 		}
-		_, err = dbconn.Exec(ctx, fmt.Sprintf(`insert into "%s" ("type", "map_id") values ($1, $2);`, l.mapTxnTable), event.t, hashId)
+		rows, _ := dbconn.Query(ctx, `insert into "map_transactions" ("type", "map_id") values ($1, $2) returning "id";`, event.txnType, hashId)
+		txnId, err := pgx.CollectOneRow(rows, pgx.RowTo[int32])
 		if err != nil {
 			return fmt.Errorf("failed to insert into %s table %w", l.mapTxnTable, err)
 		}
 
 		// If the event contains data, insert that data into key-value table.
 		// Queue all the queries and send them in a single batch.
-		if event.t == eventPut {
+		if event.txnType == txnPut {
 			batch := &pgx.Batch{}
 			for key, value := range event.value.(map[string]string) {
-				batch.Queue(fmt.Sprintf(`inset into "%s" ("map_id", "key", "value") values ($1, $2, $3);`, l.mapKeyValueTable), hashId, key, value)
+				batch.Queue(`insert into "map_key_values" ("txn_id", "map_id", "key", "value") values ($1, $2, $3, $4);`, txnId, hashId, key, value)
 			}
 			err = dbconn.SendBatch(context.Background(), batch).Close()
 			if err != nil {
@@ -340,7 +346,7 @@ func (l *PostgresTransactionLogger) insertTransactionIntoDB(dbconn *pgxpool.Conn
 	return nil
 }
 
-func (l *PostgresTransactionLogger) ProcessTransactions(ctx context.Context) {
+func (l *PostgresTxnLogger) ProcessTransactions(ctx context.Context) {
 	eventsChan := make(chan Event, 32)
 	errorsChan := make(chan error, 1)
 
@@ -418,7 +424,7 @@ func selectEventsFromTable(dbconn *pgxpool.Conn, storage StorageType, query, txn
 		batch.Queue(query, id).Query(func(rows pgx.Rows) error {
 			events, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Event, error) {
 				event := Event{storageType: storage}
-				err := row.Scan(&event.t, &event.key, &event.value, &event.timestamp)
+				err := row.Scan(&event.txnType, &event.key, &event.value, &event.timestamp)
 				return event, err
 			})
 			if err != nil {
@@ -442,7 +448,7 @@ func selectEventsFromTable(dbconn *pgxpool.Conn, storage StorageType, query, txn
 	return nil
 }
 
-func (l *PostgresTransactionLogger) ReadEvents() (<-chan Event, <-chan error) {
+func (l *PostgresTxnLogger) ReadEvents() (<-chan Event, <-chan error) {
 	eventsChan := make(chan Event)
 	errorsChan := make(chan error, 1)
 
@@ -486,7 +492,75 @@ func (l *PostgresTransactionLogger) ReadEvents() (<-chan Event, <-chan error) {
 			return
 		}
 
-		// TODO: Implement a query to get hash maps
+		{
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+
+			type Txn struct {
+				Id     int32
+				Type   TxnType
+				HashId int32
+				Hash   string
+			}
+
+			query = `select "map_transactions"."id", "type", "map_hashes"."id" as "hash_id", "map_hashes"."key" as "hash" 
+				from "map_transactions"
+				join "map_hashes" on "map_hashes"."id" = "map_transactions"."map_id";`
+
+			rows, _ := dbconn.Query(ctx, query)
+			txns, err := pgx.CollectRows(rows, pgx.RowToStructByPos[Txn])
+			if err != nil {
+				errorsChan <- fmt.Errorf("failed to select map transaction ids %w", err)
+				return
+			}
+
+			// type  |     hash      |   key   |       value
+			// ------+---------------+---------+-------------------
+			//  put  | hash_0xfffa99 | event   | INSERT
+			//  put  | hash_0xfffa99 | id      | 1234
+			//  put  | hash_0xfffa99 | message | "hello how are you"
+			// query = `select "type", "map_hashes"."key" as "hash", "map_key_values"."key", "value" from "map_transactions"
+			// 		join "map_hashes" on "map_transactions"."map_id" = "map_hashes"."id"
+			// 		join "map_key_values" on "map_transactions"."id" = "map_key_values"."txn_id"
+			// 		where "map_transactions"."id" = ($1);`
+
+			query = `select "key", "value" from "map_key_values" where "txn_id" = ($1) and "map_id" = ($2);`
+
+			batch := &pgx.Batch{}
+			for _, txn := range txns {
+				if txn.Type == txnPut {
+					batch.Queue(query, txn.Id, txn.HashId).Query(func(rows pgx.Rows) error {
+						hashmap := make(map[string]string)
+						if _, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (map[string]string, error) {
+							var key, value string
+							err := row.Scan(&key, &value)
+							hashmap[key] = value
+							return nil, err
+						}); err == nil {
+							// Send event with the value containing a hashmap
+							eventsChan <- Event{storageType: storageMap, txnType: txn.Type, key: txn.Hash, value: hashmap}
+						}
+						return err
+					})
+				} else {
+					// NOTE: Since all the get/delete transactions should happen after any put transactions
+					// we need to make a batch query event though we won't use the result anyhow.
+					// This should be restructured.
+					batch.Queue(query, txn.Id, txn.HashId).QueryRow(func(row pgx.Row) error {
+						eventsChan <- Event{storageType: storageMap, txnType: txn.Type, key: txn.Hash}
+						return nil
+					})
+				}
+			}
+
+			batchCtx, batchCancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer batchCancel()
+
+			if err := dbconn.SendBatch(batchCtx, batch).Close(); err != nil {
+				errorsChan <- fmt.Errorf("failed to query map key value table %w", err)
+				return
+			}
+		}
 	}()
 
 	return eventsChan, errorsChan
