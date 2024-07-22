@@ -34,14 +34,14 @@ func TestMain(m *testing.M) {
 	exitCode = m.Run()
 }
 
-func populatePostgresWithTransactions(logger *PostgresTransactionLogger) {
+func populatePostgresWithTransactions(logger *PostgresTxnLogger) {
 	for i := 0; i < 10; i++ {
 		key := "_entry_" + strconv.Itoa(i)
-		logger.WriteTransaction(eventPut, storageInt, key, (i+1)<<2)
+		logger.WriteTransaction(txnPut, storageInt, key, (i+1)<<2)
 	}
 }
 
-// func TestInitPostgresTransactionLogger(t *testing.T) {
+// func TestInitPostgresTxnLogger(t *testing.T) {
 // 	defer goleak.VerifyNone(t)
 
 // 	logger, err := newDBTransactionLogger(PostgresSettings{
