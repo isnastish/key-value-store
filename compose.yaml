@@ -7,9 +7,12 @@ services:
     ports:
       # Port 8080 is accessible for servier-to-service communication, 
       # and the same port is available for accessing the container from outside the network.
+      # locahost has to be specified, otherwise some weird things happening, 
+      # only occasionally I can reach the endpoint from outside, using other clients (python for example).
       - "127.0.0.1:8080:8080"
     depends_on:
-      - postgres-db
+      postgres-db:
+        condition: service_healthy
     networks:
       - backend
 
@@ -24,8 +27,10 @@ services:
       # Using the HOST_PORT, the container can be accessible from outside the network.
       # Thus, in order for kvs server to connect to postgres database running in a separate
       # docker container it should use URL: postgres://...@postgres-db:CONTAINER_PORT/...
-      - "127.0.0.1:4040:5432"
+      - "4040:5432"
     environment:
+      # Define environment variables inside the container. 
+      # It can come from .env file as well using env_file: directive.
       - POSTGRES_PORT=5432
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=nastish
@@ -33,6 +38,14 @@ services:
     command: ["-c", "ssl=off"]
     networks:
       - backend
+    healthcheck:
+      # https://docs.docker.com/reference/dockerfile/#healthcheck
+      # https://www.postgresql.org/docs/9.4/app-pg-isready.html
+      test: ["CMD-SHELL", "pg_isready", "-d", "db_prod"]
+      interval: 10s
+      timeout: 2s
+      retries: 5
+      start_period: 0s
 
     # volumes:
     #  - postgres-db:/var/lib/postgresql/data
