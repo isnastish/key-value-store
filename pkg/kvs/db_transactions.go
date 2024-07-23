@@ -284,7 +284,7 @@ func (l *PostgresTxnLogger) insertTransactionIntoDB(dbconn *pgxpool.Conn, event 
 
 		var value interface{} = nil
 		if event.txnType == txnPut {
-			value = int32(event.value.(int))
+			value = event.value.(int32)
 		}
 		if _, err = dbconn.Exec(ctx, fmt.Sprintf(`insert into "%s" ("type", "key_id", "value") values ($1, $2, $3);`, l.intTxnTable), event.txnType, keyId, value); err != nil {
 			return fmt.Errorf("failed to insert into %s table %w", l.intTxnTable, err)
