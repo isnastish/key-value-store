@@ -18,5 +18,3 @@ COPY --from=build-env /go/bin/services/kvs /kvs/
 EXPOSE 8080/tcp
 
 ENTRYPOINT [ "/kvs/kvs" ]
-
-CMD [ "--endpoint",  ":8080"]

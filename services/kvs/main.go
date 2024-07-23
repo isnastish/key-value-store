@@ -34,8 +34,10 @@ func main() {
 		}
 
 	case "db":
-		// For development
-		os.Setenv("DATABASE_URL", "postgresql://postgres:nastish@127.0.0.1:5432/postgres?sslmode=disable")
+		// NOTE: For development only.
+		// postgres-db is the name of a container running postgresql database on the same network
+		// as our kvs service. The container is specified in compose.yaml file
+		os.Setenv("DATABASE_URL", "postgresql://postgres:nastish@postgres-db:5432/postgres?sslmode=disable")
 
 		postgresURL := os.Getenv("DATABASE_URL")
 		if postgresURL == "" {

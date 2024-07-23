@@ -1,11 +1,10 @@
 package kvs
 
 import (
-	_ "context"
+	"context"
 	"os"
-	"strconv"
 	"testing"
-	_ "time"
+	"time"
 
 	_ "github.com/stretchr/testify/assert"
 
@@ -34,49 +33,33 @@ func TestMain(m *testing.M) {
 	exitCode = m.Run()
 }
 
-func populatePostgresWithTransactions(logger *PostgresTxnLogger) {
-	for i := 0; i < 10; i++ {
-		key := "_entry_" + strconv.Itoa(i)
-		logger.WriteTransaction(txnPut, storageInt, key, (i+1)<<2)
+func TestIntTransaction(t *testing.T) {
+	// defer goleak.VerifyNone(t)
+	const DATABASE_URl = "postgresql://postgres:12345@localhost:4040/postgres?sslmode=disable"
+	txnLogger, err := NewDBTxnLogger(DATABASE_URl)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go txnLogger.ProcessTransactions(ctx)
+
+	<-time.After(200 * time.Millisecond)
+
+	txnLogger.WriteTransaction(txnPut, storageInt, "number", 1777998)
+	txnLogger.WriteTransaction(txnGet, storageInt, "number", nil)
+
+	eventList := []Event{}
+	events, errors := txnLogger.ReadEvents()
+	for {
+		select {
+		case event := <-events:
+			eventList = append(eventList, event)
+		case err := <-errors:
+			t.Error(err)
+		}
 	}
 }
-
-// func TestInitPostgresTxnLogger(t *testing.T) {
-// 	defer goleak.VerifyNone(t)
-
-// 	logger, err := newDBTransactionLogger(PostgresSettings{
-// 		host:     "localhost",
-// 		port:     5432,
-// 		dbName:   "postgres",
-// 		userName: "postgres",
-// 		userPwd:  "12345",
-// 	})
-// 	assert.NoError(t, err)
-
-// 	ctx, cancel := context.WithCancel(context.Background())
-// 	defer func() {
-// 		cancel()
-// 		logger.WaitForPendingTransactions()
-// 	}()
-
-// 	go logger.ProcessTransactions(ctx)
-
-// 	time.Sleep(200 * time.Millisecond)
-
-// 	populatePostgresWithTransactions(logger)
-
-// 	// Wait a bit until the transaction will be added into a database
-// 	time.Sleep(2 * time.Second)
-
-// 	eventList := []Event{}
-
-// 	events, errors := logger.ReadEvents()
-// 	for {
-// 		select {
-// 		case event := <-events:
-// 			eventList = append(eventList, event)
-// 		case err := <-errors:
-// 			t.Error(err)
-// 		}
-// 	}
-// }
