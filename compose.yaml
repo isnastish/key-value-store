@@ -1,0 +1,42 @@
+services:
+  kvs:
+    container_name: "kvs-service"
+    image: 'kvs:latest'
+    build: 
+      context: ./
+    ports:
+      # Port 8080 is accessible for servier-to-service communication, 
+      # and the same port is available for accessing the container from outside the network.
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      - postgres-db
+    networks:
+      - backend
+
+  postgres-db:
+    image: 'postgres:16.3'
+    restart: always
+    container_name: "postgres-emulator"
+    ports:
+      # https://docs.docker.com/compose/networking/
+      # HOST_PORT:CONTAINER_PORT
+      # Networked service-to-service communication uses the CONTAINER_PORT.
+      # Using the HOST_PORT, the container can be accessible from outside the network.
+      # Thus, in order for kvs server to connect to postgres database running in a separate
+      # docker container it should use URL: postgres://...@postgres-db:CONTAINER_PORT/...
+      - "127.0.0.1:4040:5432"
+    environment:
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=nastish
+      - POSTGRES_DB=postgres
+    command: ["-c", "ssl=off"]
+    networks:
+      - backend
+
+    # volumes:
+    #  - postgres-db:/var/lib/postgresql/data
+
+networks:
+  backend:
+    driver: bridge

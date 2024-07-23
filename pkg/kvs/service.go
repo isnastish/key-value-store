@@ -569,6 +569,8 @@ func NewService(settings *ServiceSettings) *Service {
 }
 
 func (s *Service) Run() {
+	defer s.txnLogger.Close()
+
 	if s.running {
 		log.Logger.Error("Service is already running")
 		return

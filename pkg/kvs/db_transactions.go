@@ -284,7 +284,7 @@ func (l *PostgresTxnLogger) insertTransactionIntoDB(dbconn *pgxpool.Conn, event 
 
 		var value interface{} = nil
 		if event.txnType == txnPut {
-			value = event.value.(int32)
+			value = int32(event.value.(int))
 		}
 		if _, err = dbconn.Exec(ctx, fmt.Sprintf(`insert into "%s" ("type", "key_id", "value") values ($1, $2, $3);`, l.intTxnTable), event.txnType, keyId, value); err != nil {
 			return fmt.Errorf("failed to insert into %s table %w", l.intTxnTable, err)
@@ -346,6 +346,10 @@ func (l *PostgresTxnLogger) insertTransactionIntoDB(dbconn *pgxpool.Conn, event 
 	return nil
 }
 
+func (l *PostgresTxnLogger) Close() {
+	l.dbpool.Close()
+}
+
 func (l *PostgresTxnLogger) ProcessTransactions(ctx context.Context) {
 	eventsChan := make(chan Event, 32)
 	errorsChan := make(chan error, 1)
@@ -356,10 +360,6 @@ func (l *PostgresTxnLogger) ProcessTransactions(ctx context.Context) {
 	l.wg.Add(1)
 	go func() {
 		defer l.wg.Done()
-
-		// This is the best place to close a connections pool.
-		// Once all the write completed.
-		defer l.dbpool.Close()
 
 		dbconn, err := l.dbpool.Acquire(context.Background())
 		if err != nil {
