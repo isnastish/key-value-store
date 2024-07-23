@@ -78,9 +78,22 @@ func TestIntTransaction(t *testing.T) {
 	writeTxnFromEvent(txnLogger, &i32Get)
 	writeTxnFromEvent(txnLogger, &i32Del)
 
-	// f32PutEvent := Event{txnType: txnPut, key: "_f32_key", value: 3.14}
-	// f32GetEvent := Event{txnType: txnGet, key: "_f32_key"}
-	// f32DelEvent := Event{txnType: txnDelete, key: "_f32_key"}
+	// TODO: Fix conversion float64 to float32
+	f32Put := Event{storageType: storageFloat, txnType: txnPut, key: "_f32_key", value: float32(3.14)}
+	f32Get := Event{storageType: storageFloat, txnType: txnGet, key: "_f32_key"}
+	f32Del := Event{storageType: storageFloat, txnType: txnDelete, key: "_f32_key"}
+
+	writeTxnFromEvent(txnLogger, &f32Put)
+	writeTxnFromEvent(txnLogger, &f32Get)
+	writeTxnFromEvent(txnLogger, &f32Del)
+
+	strPut := Event{storageType: storageString, txnType: txnPut, key: "_str_key", value: "e3eDa7Ae0583Df4EcC5BFD34EB27AA56dBAdd73F16ABdB78a4EE59f904cDd6f8"}
+	strGet := Event{storageType: storageString, txnType: txnGet, key: "_str_key"}
+	strDel := Event{storageType: storageString, txnType: txnDelete, key: "_str_key"}
+
+	writeTxnFromEvent(txnLogger, &strPut)
+	writeTxnFromEvent(txnLogger, &strGet)
+	writeTxnFromEvent(txnLogger, &strDel)
 
 	// Make sure that events we properly inserted into the database.
 	// This is an emulation of a real-world scenario, where the data is already in a database
@@ -104,10 +117,15 @@ func TestIntTransaction(t *testing.T) {
 		}
 	}
 
-	assert.Equal(t, 3, len(eventList))
 	assert.True(t, hasEvent(eventList, &i32Put))
 	assert.True(t, hasEvent(eventList, &i32Get))
 	assert.True(t, hasEvent(eventList, &i32Del))
+	assert.True(t, hasEvent(eventList, &f32Put))
+	assert.True(t, hasEvent(eventList, &f32Get))
+	assert.True(t, hasEvent(eventList, &f32Del))
+	assert.True(t, hasEvent(eventList, &strPut))
+	assert.True(t, hasEvent(eventList, &strGet))
+	assert.True(t, hasEvent(eventList, &strDel))
 }
 
 // Decided to separate testing map transactions from other types
