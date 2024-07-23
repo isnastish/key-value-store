@@ -17,8 +17,8 @@ import (
 // keep growing and we eventually run out of memory or ids to enumerate the transactions.
 
 type PostgresTxnLogger struct {
-	eventsChan chan<- Event
-	errorsChan <-chan error
+	eventsChan chan Event
+	errorsChan chan error
 	dbpool     *pgxpool.Pool
 	wg         sync.WaitGroup
 
@@ -64,8 +64,11 @@ func NewDBTxnLogger(databaseURL string) (*PostgresTxnLogger, error) {
 	}
 
 	logger := &PostgresTxnLogger{
-		dbpool: dbpool,
-		wg:     sync.WaitGroup{},
+		dbpool:     dbpool,
+		wg:         sync.WaitGroup{},
+		eventsChan: make(chan Event, 32),
+		errorsChan: make(chan error, 1),
+
 		// keep a list of table names in case we need to change them,
 		// we can do it in one place, and it's easy to drop all the table at once
 		intKeyTable:      "int_keys",
@@ -289,6 +292,7 @@ func (l *PostgresTxnLogger) insertTransactionIntoDB(dbconn *pgxpool.Conn, event 
 		if _, err = dbconn.Exec(ctx, fmt.Sprintf(`insert into "%s" ("type", "key_id", "value") values ($1, $2, $3);`, l.intTxnTable), event.txnType, keyId, value); err != nil {
 			return fmt.Errorf("failed to insert into %s table %w", l.intTxnTable, err)
 		}
+		log.Logger.Info("Inserted event %v into int table", event)
 
 	case storageFloat:
 		keyId, err := extractKeyId(dbconn, l.floatKeyTable, event)
@@ -303,6 +307,7 @@ func (l *PostgresTxnLogger) insertTransactionIntoDB(dbconn *pgxpool.Conn, event 
 		if _, err = dbconn.Exec(ctx, fmt.Sprintf(`insert into "%s" ("type", "key_id", "value") values ($1, $2, $3);`, l.floatTxnTable), event.txnType, keyId, value); err != nil {
 			return fmt.Errorf("failed to insert into %s table %w", l.floatTxnTable, err)
 		}
+		log.Logger.Info("Inserted event %v into float table", event)
 
 	case storageString:
 		keyId, err := extractKeyId(dbconn, l.strKeyTable, event)
@@ -317,6 +322,7 @@ func (l *PostgresTxnLogger) insertTransactionIntoDB(dbconn *pgxpool.Conn, event 
 		if _, err := dbconn.Exec(ctx, fmt.Sprintf(`insert into "%s" ("type", "key_id", "value") values ($1, $2, $3);`, l.strTxnTable), event.txnType, keyId, value); err != nil {
 			return fmt.Errorf("failed to insert into %s table %w", l.strTxnTable, err)
 		}
+		log.Logger.Info("Inserted event %v into string table", event)
 
 	case storageMap:
 		hashId, err := extractKeyId(dbconn, l.mapHashTable, event)
@@ -341,6 +347,7 @@ func (l *PostgresTxnLogger) insertTransactionIntoDB(dbconn *pgxpool.Conn, event 
 				return fmt.Errorf("failed to insert into %s table %w", l.mapKeyValueTable, err)
 			}
 		}
+		log.Logger.Info("Inserted event %v into map table", event)
 	}
 
 	return nil
@@ -351,19 +358,17 @@ func (l *PostgresTxnLogger) Close() {
 }
 
 func (l *PostgresTxnLogger) ProcessTransactions(ctx context.Context) {
-	eventsChan := make(chan Event, 32)
-	errorsChan := make(chan error, 1)
-
-	l.eventsChan = eventsChan
-	l.errorsChan = errorsChan
-
+	// NOTE: We never read errors sent here.
+	// There should be a goroutine running on the background and and processing
+	// incoming errors. If we encounter at least one while writing transactions,
+	// we should stop the server?!
 	l.wg.Add(1)
 	go func() {
 		defer l.wg.Done()
 
 		dbconn, err := l.dbpool.Acquire(context.Background())
 		if err != nil {
-			errorsChan <- fmt.Errorf("failed to acquire db connection %w", err)
+			l.errorsChan <- fmt.Errorf("failed to acquire db connection %w", err)
 			return
 		}
 
@@ -372,17 +377,18 @@ func (l *PostgresTxnLogger) ProcessTransactions(ctx context.Context) {
 
 		for {
 			select {
-			case event := <-eventsChan:
+			case event := <-l.eventsChan:
 				if err := l.insertTransactionIntoDB(dbconn, &event); err != nil {
-					errorsChan <- err
+					log.Logger.Error("Failed to insert an event %v, %v", event, err)
+					l.errorsChan <- err
 					return
 				}
 
 			case <-ctx.Done():
-				if len(eventsChan) > 0 {
-					for event := range eventsChan {
+				if len(l.eventsChan) > 0 {
+					for event := range l.eventsChan {
 						if err := l.insertTransactionIntoDB(dbconn, &event); err != nil {
-							errorsChan <- err
+							l.errorsChan <- err
 							return
 						}
 					}
@@ -419,46 +425,50 @@ func selectEventsFromTable(dbconn *pgxpool.Conn, storage StorageType, query, txn
 	}
 
 	// Sending all the queries in a single batch.
-	batch := &pgx.Batch{}
-	for _, id := range keyIds {
-		batch.Queue(query, id).Query(func(rows pgx.Rows) error {
-			events, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Event, error) {
-				event := Event{storageType: storage}
-				err := row.Scan(&event.txnType, &event.key, &event.value, &event.timestamp)
-				return event, err
+	if len(keyIds) != 0 {
+		batch := &pgx.Batch{}
+		for _, id := range keyIds {
+			batch.Queue(query, id).Query(func(rows pgx.Rows) error {
+				events, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Event, error) {
+					// NOTE: For some reason we query more events than we ever insert.
+					// Which makese me think that we use batching incorrectly.
+					event := Event{storageType: storage}
+					err := row.Scan(&event.txnType, &event.key, &event.value, &event.timestamp)
+					return event, err
+				})
+				if err != nil {
+					log.Logger.Error("Error occured when reading events from %s table, %v", txnTable, err)
+					return err
+				}
+				for _, event := range events {
+					eventsChan <- event
+				}
+				return nil
 			})
-			if err != nil {
-				log.Logger.Error("Error occured when reading events from %s table, %v", txnTable, err)
-				return err
-			}
-			for _, event := range events {
-				eventsChan <- event
-			}
-			return nil
-		})
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
 
-	err = dbconn.SendBatch(ctx, batch).Close()
-	if err != nil {
-		return fmt.Errorf("failed to select events from %s table, %w", txnTable, err)
+		err = dbconn.SendBatch(ctx, batch).Close()
+		if err != nil {
+			return fmt.Errorf("failed to select events from %s table, %w", txnTable, err)
+		}
 	}
 
 	return nil
 }
 
 func (l *PostgresTxnLogger) ReadEvents() (<-chan Event, <-chan error) {
-	eventsChan := make(chan Event)
-	errorsChan := make(chan error, 1)
+	readEventsChan := make(chan Event)
+	discoveredErrorsChan := make(chan error, 1)
 
 	go func() {
-		defer close(eventsChan)
-		defer close(errorsChan)
+		defer close(readEventsChan)
+		defer close(discoveredErrorsChan)
 
 		dbconn, err := l.dbpool.Acquire(context.Background())
 		if err != nil {
-			errorsChan <- fmt.Errorf("failed to acquire db connection %w", err)
+			discoveredErrorsChan <- fmt.Errorf("failed to acquire db connection %w", err)
 			return
 		}
 		defer dbconn.Release()
@@ -468,27 +478,27 @@ func (l *PostgresTxnLogger) ReadEvents() (<-chan Event, <-chan error) {
 			join "int_keys" on "int_keys"."id" = "int_transactions"."key_id"
 			where "int_keys"."id" = ($1);`
 
-		if err := selectEventsFromTable(dbconn, storageInt, query, l.intTxnTable, l.intKeyTable, eventsChan); err != nil {
-			errorsChan <- err
+		if err := selectEventsFromTable(dbconn, storageInt, query, l.intTxnTable, l.intKeyTable, readEventsChan); err != nil {
+			discoveredErrorsChan <- err
 			return
 		}
 
 		// do the type cast from `numeric` type to real(float32)
-		query = `select "type", "key", cast("value" as real), "timestamp" from "float_transactions" 
-			join "float_keys" on "float_keys"."id" = "float_transactions"."key_id" 
+		query = `select "type", "key", cast("value" as real), "timestamp" from "float_transactions"
+			join "float_keys" on "float_keys"."id" = "float_transactions"."key_id"
 			where "float_keys"."id" = ($1);`
 
-		if err := selectEventsFromTable(dbconn, storageFloat, query, l.floatTxnTable, l.floatKeyTable, eventsChan); err != nil {
-			errorsChan <- err
+		if err := selectEventsFromTable(dbconn, storageFloat, query, l.floatTxnTable, l.floatKeyTable, readEventsChan); err != nil {
+			discoveredErrorsChan <- err
 			return
 		}
 
 		query = `select "type", "key", "value", "timestamp" from "str_transactions"
-			join "str_keys" on "str_keys"."id" = "str_transactions"."key_id" 
+			join "str_keys" on "str_keys"."id" = "str_transactions"."key_id"
 			where "str_keys"."id" = ($1);`
 
-		if err := selectEventsFromTable(dbconn, storageString, query, l.strTxnTable, l.strKeyTable, eventsChan); err != nil {
-			errorsChan <- err
+		if err := selectEventsFromTable(dbconn, storageString, query, l.strTxnTable, l.strKeyTable, readEventsChan); err != nil {
+			discoveredErrorsChan <- err
 			return
 		}
 
@@ -510,7 +520,7 @@ func (l *PostgresTxnLogger) ReadEvents() (<-chan Event, <-chan error) {
 			rows, _ := dbconn.Query(ctx, query)
 			txns, err := pgx.CollectRows(rows, pgx.RowToStructByPos[Txn])
 			if err != nil {
-				errorsChan <- fmt.Errorf("failed to select map transaction ids %w", err)
+				discoveredErrorsChan <- fmt.Errorf("failed to select map transaction ids %w", err)
 				return
 			}
 
@@ -523,45 +533,45 @@ func (l *PostgresTxnLogger) ReadEvents() (<-chan Event, <-chan error) {
 			// 		join "map_hashes" on "map_transactions"."map_id" = "map_hashes"."id"
 			// 		join "map_key_values" on "map_transactions"."id" = "map_key_values"."txn_id"
 			// 		where "map_transactions"."id" = ($1);`
-
-			query = `select "key", "value" from "map_key_values" where "txn_id" = ($1) and "map_id" = ($2);`
-
-			batch := &pgx.Batch{}
-			for _, txn := range txns {
-				if txn.Type == txnPut {
-					batch.Queue(query, txn.Id, txn.HashId).Query(func(rows pgx.Rows) error {
-						hashmap := make(map[string]string)
-						if _, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (map[string]string, error) {
-							var key, value string
-							err := row.Scan(&key, &value)
-							hashmap[key] = value
-							return nil, err
-						}); err == nil {
-							// Send event with the value containing a hashmap
-							eventsChan <- Event{storageType: storageMap, txnType: txn.Type, key: txn.Hash, value: hashmap}
-						}
-						return err
-					})
-				} else {
-					// NOTE: Since all the get/delete transactions should happen after any put transactions
-					// we need to make a batch query event though we won't use the result anyhow.
-					// This should be restructured.
-					batch.Queue(query, txn.Id, txn.HashId).QueryRow(func(row pgx.Row) error {
-						eventsChan <- Event{storageType: storageMap, txnType: txn.Type, key: txn.Hash}
-						return nil
-					})
+			if len(txns) != 0 {
+				query = `select "key", "value" from "map_key_values" where "txn_id" = ($1) and "map_id" = ($2);`
+				batch := &pgx.Batch{}
+				for _, txn := range txns {
+					if txn.Type == txnPut {
+						batch.Queue(query, txn.Id, txn.HashId).Query(func(rows pgx.Rows) error {
+							hashmap := make(map[string]string)
+							if _, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (map[string]string, error) {
+								var key, value string
+								err := row.Scan(&key, &value)
+								hashmap[key] = value
+								return nil, err
+							}); err == nil {
+								// Send event with the value containing a hashmap
+								readEventsChan <- Event{storageType: storageMap, txnType: txn.Type, key: txn.Hash, value: hashmap}
+							}
+							return err
+						})
+					} else {
+						// NOTE: Since all the get/delete transactions should happen after any put transactions
+						// we need to make a batch query event though we won't use the result anyhow.
+						// This should be restructured.
+						batch.Queue(query, txn.Id, txn.HashId).QueryRow(func(row pgx.Row) error {
+							readEventsChan <- Event{storageType: storageMap, txnType: txn.Type, key: txn.Hash}
+							return nil
+						})
+					}
 				}
-			}
 
-			batchCtx, batchCancel := context.WithTimeout(context.Background(), 15*time.Second)
-			defer batchCancel()
+				batchCtx, batchCancel := context.WithTimeout(context.Background(), 15*time.Second)
+				defer batchCancel()
 
-			if err := dbconn.SendBatch(batchCtx, batch).Close(); err != nil {
-				errorsChan <- fmt.Errorf("failed to query map key value table %w", err)
-				return
+				if err := dbconn.SendBatch(batchCtx, batch).Close(); err != nil {
+					discoveredErrorsChan <- fmt.Errorf("failed to query map key value table %w", err)
+					return
+				}
 			}
 		}
 	}()
 
-	return eventsChan, errorsChan
+	return readEventsChan, discoveredErrorsChan
 }

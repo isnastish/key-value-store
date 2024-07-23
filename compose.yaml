@@ -28,6 +28,8 @@ services:
       # docker container it should use URL: postgres://...@postgres-db:CONTAINER_PORT/...
       - "4040:5432"
     environment:
+      # Define environment variables inside the container. 
+      # It can come from .env file as well using env_file: directive.
       - POSTGRES_PORT=5432
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=nastish

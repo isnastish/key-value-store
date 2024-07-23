@@ -12,9 +12,7 @@ import (
 
 func startDockerContainer(expectedOutput, command string, args ...string) (bool, error) {
 	tearDown := false
-	// cmd := exec.Command(command, args...)
-
-	cmd := exec.Command("docker", "run", "--rm", "--name=postgres-emulator", "-p", "5432:5432", "-e", "POSTGRES_PASSWORD=12345", "postgres:16.3")
+	cmd := exec.Command(command, args...)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

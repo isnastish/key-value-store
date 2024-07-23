@@ -516,12 +516,14 @@ func (s *Service) processSavedTransactions() error {
 			}
 
 		case err = <-errorsChan:
-			if err != io.EOF {
+			// Error received while reading events
+			if err != io.EOF && err != nil {
 				return err
 			}
 			return nil
 		}
 
+		// Error encountered while inserting events into the storage
 		if err != nil {
 			return err
 		}
