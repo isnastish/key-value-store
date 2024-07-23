@@ -11,7 +11,8 @@ services:
       # only occasionally I can reach the endpoint from outside, using other clients (python for example).
       - "127.0.0.1:8080:8080"
     depends_on:
-      - postgres-db
+      postgres-db:
+        condition: service_healthy
     networks:
       - backend
 
@@ -37,6 +38,14 @@ services:
     command: ["-c", "ssl=off"]
     networks:
       - backend
+    healthcheck:
+      # https://docs.docker.com/reference/dockerfile/#healthcheck
+      # https://www.postgresql.org/docs/9.4/app-pg-isready.html
+      test: ["CMD-SHELL", "pg_isready", "-d", "db_prod"]
+      interval: 10s
+      timeout: 2s
+      retries: 5
+      start_period: 0s
 
     # volumes:
     #  - postgres-db:/var/lib/postgresql/data

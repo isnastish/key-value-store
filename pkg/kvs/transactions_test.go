@@ -13,7 +13,7 @@ import (
 	"github.com/isnastish/kvs/pkg/testsetup"
 )
 
-const hostPort = 4040
+const hostPort = 6060
 const psqlPassword = "12345"
 
 func TestMain(m *testing.M) {
@@ -83,4 +83,7 @@ func TestIntTransaction(t *testing.T) {
 	assert.Equal(t, eventKey, eventList[0].key)
 	assert.Equal(t, txnPut, eventList[0].txnType)
 	assert.Equal(t, eventValue, eventList[0].value.(int32))
+
+	assert.Equal(t, txnGet, eventList[1].txnType)
+	assert.Equal(t, eventKey, eventList[1].key)
 }
