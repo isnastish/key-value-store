@@ -71,8 +71,8 @@ func TestIntTransaction(t *testing.T) {
 	}()
 
 	i32Put := Event{storageType: storageInt, txnType: txnPut, key: "_i32_key", value: int32(1777998)}
-	i32Get := Event{storageType: storageInt, txnType: txnGet, key: "_i32_key"}
-	i32Del := Event{storageType: storageInt, txnType: txnDelete, key: "_i32_key"}
+	i32Get := Event{storageType: storageInt, txnType: txnGet, key: i32Put.key}
+	i32Del := Event{storageType: storageInt, txnType: txnDelete, key: i32Get.key}
 
 	writeTxnFromEvent(txnLogger, &i32Put)
 	writeTxnFromEvent(txnLogger, &i32Get)
@@ -80,16 +80,16 @@ func TestIntTransaction(t *testing.T) {
 
 	// TODO: Fix conversion float64 to float32
 	f32Put := Event{storageType: storageFloat, txnType: txnPut, key: "_f32_key", value: float32(3.14)}
-	f32Get := Event{storageType: storageFloat, txnType: txnGet, key: "_f32_key"}
-	f32Del := Event{storageType: storageFloat, txnType: txnDelete, key: "_f32_key"}
+	f32Get := Event{storageType: storageFloat, txnType: txnGet, key: f32Put.key}
+	f32Del := Event{storageType: storageFloat, txnType: txnDelete, key: f32Get.key}
 
 	writeTxnFromEvent(txnLogger, &f32Put)
 	writeTxnFromEvent(txnLogger, &f32Get)
 	writeTxnFromEvent(txnLogger, &f32Del)
 
 	strPut := Event{storageType: storageString, txnType: txnPut, key: "_str_key", value: "e3eDa7Ae0583Df4EcC5BFD34EB27AA56dBAdd73F16ABdB78a4EE59f904cDd6f8"}
-	strGet := Event{storageType: storageString, txnType: txnGet, key: "_str_key"}
-	strDel := Event{storageType: storageString, txnType: txnDelete, key: "_str_key"}
+	strGet := Event{storageType: storageString, txnType: txnGet, key: strPut.key}
+	strDel := Event{storageType: storageString, txnType: txnDelete, key: strPut.key}
 
 	writeTxnFromEvent(txnLogger, &strPut)
 	writeTxnFromEvent(txnLogger, &strGet)
@@ -126,10 +126,4 @@ func TestIntTransaction(t *testing.T) {
 	assert.True(t, hasEvent(eventList, &strPut))
 	assert.True(t, hasEvent(eventList, &strGet))
 	assert.True(t, hasEvent(eventList, &strDel))
-}
-
-// Decided to separate testing map transactions from other types
-// since they are the most complex.
-func TestMapTransactions(t *testing.T) {
-
 }
