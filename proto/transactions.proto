@@ -1,16 +1,18 @@
 syntax = "proto3";
 package transactions;
 
+option go_package = "github.com/isnastish/kvs/proto";
+
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/empty.proto";
 import "google/protobuf/struct.proto";
 
 enum TxnType {
-    TXN_PUT = 1;
-    TXN_GET = 2;
-    TXN_DEL = 3;
-    TXN_INCR = 4;
-    TXN_INCR_BY = 5;
+    TXN_PUT = 0;
+    TXN_GET = 1;
+    TXN_DEL = 2;
+    TXN_INCR = 3;
+    TXN_INCR_BY = 4;
 }
 
 message TxnBase {
@@ -26,7 +28,7 @@ message IntTxn {
 
 message FloatTxn {
     TxnBase base = 1;
-    float32 value = 2;
+    float value = 2;
 }
 
 message StrTxn {
@@ -40,10 +42,10 @@ message MapTxn {
 }
 
 service TransactionService {
-    rpc WriteIntTxn(IntTxn) returns (google.protobuf.Empty);
-    rpc WriteFloatTxn(FloatTxn) returns (google.protobuf.Empty);
-    rpc WriteStrTxn(StrTxn) returns (google.protobuf.Empty);
-    rpc WriteMapTxn(MapTxn) returns (google.protobuf.Empty);
+    rpc WriteIntTxn(IntTxn) returns (google.protobuf.Empty) {}
+    rpc WriteFloatTxn(FloatTxn) returns (google.protobuf.Empty) {}
+    rpc WriteStrTxn(StrTxn) returns (google.protobuf.Empty) {}
+    rpc WriteMapTxn(MapTxn) returns (google.protobuf.Empty) {}
 }
 
 // NOTE: Reading transactions would be more involved,
