@@ -57,4 +57,5 @@ func main() {
 
 	service := kvs.NewService(&settings)
 	service.Run()
+	os.Exit(0)
 }

@@ -1,0 +1,16 @@
+syntax = "proto3";
+package transactions;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+
+message IntTxn {
+    string txnType = 1;
+    google.protobuf.Timestamp timestamp = 2;
+    string key = 3;
+    int32 value = 4; 
+}
+
+service TransactionService {
+    rpc 
+}
