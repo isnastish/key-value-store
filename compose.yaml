@@ -16,6 +16,14 @@ services:
     networks:
       - backend
 
+  txn-service:
+    # It should have its own docker image.
+    # It should depend on the postgresql database container
+    # kvs-service should be dependent on txn-service (and won't start until both postgres-database and txn-service are healthy).
+    # and the service has to be healthy.
+    # We should verify whether it's healthy every 5seconds or so.
+    container_name: transaction-service
+
   postgres-db:
     image: 'postgres:16.3'
     restart: always
