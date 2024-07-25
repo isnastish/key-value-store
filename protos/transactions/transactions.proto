@@ -1,0 +1,56 @@
+syntax = "proto3";
+
+package transactions;
+
+// option go_package = "github.com/isnastish/kvs/proto";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+import "google/protobuf/struct.proto";
+
+service TransactionService {
+    rpc WriteIntTxn(IntTxn) returns (google.protobuf.Empty);
+    rpc WriteFloatTxn(FloatTxn) returns (google.protobuf.Empty);
+    rpc WriteStrTxn(StrTxn) returns (google.protobuf.Empty);
+    rpc WriteMapTxn(MapTxn) returns (google.protobuf.Empty);
+
+    // Streaming rpcs: https://grpc.io/docs/languages/go/basics/
+    rpc ReadIntTxns(google.protobuf.Empty) returns (stream IntTxn);
+    rpc ReadFloatTxns(google.protobuf.Empty) returns (stream FloatTxn);
+    rpc ReadStrTxn(google.protobuf.Empty) returns (stream StrTxn);
+    rpc ReadMapTxn(google.protobuf.Empty) returns (stream MapTxn);
+}
+
+enum TxnType {
+    TXN_PUT = 0;
+    TXN_GET = 1;
+    TXN_DEL = 2;
+    TXN_INCR = 3;
+    TXN_INCR_BY = 4;
+}
+
+message TxnBase {
+    string txnType = 1;
+    google.protobuf.Timestamp timestamp = 2;
+    string key = 3;
+}
+
+message IntTxn {
+    TxnBase base = 1;
+    int32 value = 2; 
+}
+
+message FloatTxn {
+    TxnBase base = 1;
+    float value = 2;
+}
+
+message StrTxn {
+    TxnBase base = 1;
+    string value = 2;
+}
+
+message MapTxn {
+    TxnBase base = 1;
+    google.protobuf.Struct data = 2;
+}
