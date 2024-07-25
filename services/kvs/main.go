@@ -5,8 +5,12 @@ import (
 	"os"
 	"strings"
 
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+
 	"github.com/isnastish/kvs/pkg/kvs"
 	"github.com/isnastish/kvs/pkg/log"
+	txn "github.com/isnastish/kvs/proto/transactions"
 )
 
 func main() {
@@ -54,6 +58,14 @@ func main() {
 	}
 
 	settings.TxnLogger = txnLogger
+
+	// Connect to transaction service
+	conn, err := grpc.NewClient(":5051", grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		log.Logger.Fatal("Failed to connect to transaction service %v", err)
+	}
+
+	txnClient := txn.NewTransactionServiceClient(conn)
 
 	service := kvs.NewService(&settings)
 	service.Run()

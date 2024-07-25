@@ -13,9 +13,12 @@ import (
 	"unicode"
 
 	"github.com/gorilla/mux"
+	"google.golang.org/protobuf/types/known/emptypb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/isnastish/kvs/pkg/log"
 	"github.com/isnastish/kvs/pkg/serviceinfo"
+	txn "github.com/isnastish/kvs/proto/transactions"
 )
 
 // TODO: Implement a throttle pattern on the server side.
@@ -50,6 +53,8 @@ type Service struct {
 	storage     map[StorageType]Storage
 	txnLogger   TxnLogger
 	running     bool
+	// client to interact with transaction service
+	txnClient txn.TransactionServiceClient
 }
 
 func (s *Service) stringPutHandler(w http.ResponseWriter, req *http.Request) {
@@ -68,6 +73,25 @@ func (s *Service) stringPutHandler(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	// NOTE: Using context.Background() for now.
+	// Should be replaced with the real context in the future.
+	_, err = s.txnClient.WriteStrTxn(
+		context.Background(),
+		&txn.StrTxn{Base: &txn.TxnBase{
+			TxnType:   txn.TxnType_TXN_PUT,
+			Timestamp: timestamppb.Now(),
+			Key:       key},
+			Value: string(val)},
+	)
+
+	if err != nil {
+		// Internal server error, failed to insert a transaction,
+		// Shutdown the server?
+		http.Error(w, fmt.Errorf("failed to write a transaction %w", err).Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// backward compatibility
 	s.writeTransaction(txnPut, storageString, key, string(val))
 
 	w.WriteHeader(http.StatusOK)
@@ -80,6 +104,21 @@ func (s *Service) stringGetHandler(w http.ResponseWriter, req *http.Request) {
 	cmd := s.storage[storageString].Get(key, newCmdResult())
 	if cmd.err != nil {
 		http.Error(w, cmd.err.Error(), http.StatusNotFound)
+		return
+	}
+
+	_, err := s.txnClient.WriteStrTxn(
+		context.Background(),
+		&txn.StrTxn{Base: &txn.TxnBase{
+			TxnType:   txn.TxnType_TXN_GET,
+			Timestamp: timestamppb.Now(),
+			Key:       key}},
+	)
+
+	if err != nil {
+		log.Logger.Error("Failed to make get string transaction")
+
+		http.Error(w, fmt.Errorf("failed to write a transaction %w", err).Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -536,12 +575,13 @@ func (s *Service) processSavedTransactions() error {
 }
 
 func (s *Service) writeTransaction(txnType TxnType, storage StorageType, key string, value interface{}) {
+
 	if !s.settings.TxnDisabled {
 		s.txnLogger.WriteTransaction(txnType, storage, key, value)
 	}
 }
 
-func NewService(settings *ServiceSettings) *Service {
+func NewService(settings *ServiceSettings, txnClient txn.TransactionServiceClient) *Service {
 	// https://stackoverflow.com/questions/39320025/how-to-stop-http-listenandserve
 	service := &Service{
 		Server: &http.Server{
@@ -550,13 +590,36 @@ func NewService(settings *ServiceSettings) *Service {
 		settings:    settings,
 		rpcHandlers: make([]*RPCHandler, 0),
 		storage:     make(map[StorageType]Storage),
-		txnLogger:   settings.TxnLogger,
+		// NOTE: Logger should be removed once we switch to a txn service.
+		txnLogger: settings.TxnLogger,
+
+		txnClient: txnClient,
 	}
 
 	service.storage[storageInt] = newIntStorage()
 	service.storage[storageFloat] = newFloatStorage()
 	service.storage[storageString] = newStrStorage()
 	service.storage[storageMap] = newMapStorage()
+
+	// NOTE: It's suffice to use background context for now.
+	stream, err := service.txnClient.ProcessTxnErrors(context.Background(), &emptypb.Empty{})
+	if err != nil {
+		log.Logger.Fatal("Failed to open an error stream %v", err)
+	}
+
+	// NOTE: This goroutine should be executed on the background and listen for any
+	// errors coming from txn service.
+	go func() {
+		for {
+			resp, err := stream.Recv()
+			if err != nil {
+				// Could io.EOF which is unexpected, we should never receive io.EOF from this stream
+				log.Logger.Error("Failed to receive from the error stream %v", err)
+				return
+			}
+			// What do we do with the error which came from the txn service?
+		}
+	}()
 
 	// NOTE: This has to be executed after both transaction logger AND the storage is initialized
 	if err := service.processSavedTransactions(); err != nil {

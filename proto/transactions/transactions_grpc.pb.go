@@ -20,28 +20,40 @@ import (
 const _ = grpc.SupportPackageIsVersion8
 
 const (
-	TransactionService_WriteIntTxn_FullMethodName   = "/transactions.TransactionService/WriteIntTxn"
-	TransactionService_WriteFloatTxn_FullMethodName = "/transactions.TransactionService/WriteFloatTxn"
-	TransactionService_WriteStrTxn_FullMethodName   = "/transactions.TransactionService/WriteStrTxn"
-	TransactionService_WriteMapTxn_FullMethodName   = "/transactions.TransactionService/WriteMapTxn"
-	TransactionService_ReadIntTxns_FullMethodName   = "/transactions.TransactionService/ReadIntTxns"
-	TransactionService_ReadFloatTxns_FullMethodName = "/transactions.TransactionService/ReadFloatTxns"
-	TransactionService_ReadStrTxn_FullMethodName    = "/transactions.TransactionService/ReadStrTxn"
-	TransactionService_ReadMapTxn_FullMethodName    = "/transactions.TransactionService/ReadMapTxn"
+	TransactionService_WriteIntTxn_FullMethodName      = "/transactions.TransactionService/WriteIntTxn"
+	TransactionService_WriteFloatTxn_FullMethodName    = "/transactions.TransactionService/WriteFloatTxn"
+	TransactionService_WriteStrTxn_FullMethodName      = "/transactions.TransactionService/WriteStrTxn"
+	TransactionService_WriteMapTxn_FullMethodName      = "/transactions.TransactionService/WriteMapTxn"
+	TransactionService_ProcessTxnErrors_FullMethodName = "/transactions.TransactionService/ProcessTxnErrors"
+	TransactionService_ReadIntTxns_FullMethodName      = "/transactions.TransactionService/ReadIntTxns"
+	TransactionService_ReadFloatTxns_FullMethodName    = "/transactions.TransactionService/ReadFloatTxns"
+	TransactionService_ReadStrTxn_FullMethodName       = "/transactions.TransactionService/ReadStrTxn"
+	TransactionService_ReadMapTxn_FullMethodName       = "/transactions.TransactionService/ReadMapTxn"
 )
 
 // TransactionServiceClient is the client API for TransactionService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type TransactionServiceClient interface {
+	// NOTE: The reason why we have to create a separate rpc for each type
+	// is because we cannot pass interfaces{}. Thus, we won't be able to specify
+	// any value.
+	// Ideally, we should call it only once
+	// One of them should return an error stream.
 	WriteIntTxn(ctx context.Context, in *IntTxn, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	WriteFloatTxn(ctx context.Context, in *FloatTxn, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	WriteStrTxn(ctx context.Context, in *StrTxn, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	WriteMapTxn(ctx context.Context, in *MapTxn, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	// This procedure has to be called only once to open a stream for errors.
+	ProcessTxnErrors(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (TransactionService_ProcessTxnErrorsClient, error)
 	// Streaming rpcs: https://grpc.io/docs/languages/go/basics/
+	// Open a stream for Int transactions.
 	ReadIntTxns(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (TransactionService_ReadIntTxnsClient, error)
+	// Open a stream for Float transactions.
 	ReadFloatTxns(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (TransactionService_ReadFloatTxnsClient, error)
+	// Open a stream for Str transactions.
 	ReadStrTxn(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (TransactionService_ReadStrTxnClient, error)
+	// Open a stream for Map transactions.
 	ReadMapTxn(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (TransactionService_ReadMapTxnClient, error)
 }
 
@@ -93,9 +105,42 @@ func (c *transactionServiceClient) WriteMapTxn(ctx context.Context, in *MapTxn, 
 	return out, nil
 }
 
+func (c *transactionServiceClient) ProcessTxnErrors(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (TransactionService_ProcessTxnErrorsClient, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &TransactionService_ServiceDesc.Streams[0], TransactionService_ProcessTxnErrors_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &transactionServiceProcessTxnErrorsClient{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+type TransactionService_ProcessTxnErrorsClient interface {
+	Recv() (*Error, error)
+	grpc.ClientStream
+}
+
+type transactionServiceProcessTxnErrorsClient struct {
+	grpc.ClientStream
+}
+
+func (x *transactionServiceProcessTxnErrorsClient) Recv() (*Error, error) {
+	m := new(Error)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
 func (c *transactionServiceClient) ReadIntTxns(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (TransactionService_ReadIntTxnsClient, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &TransactionService_ServiceDesc.Streams[0], TransactionService_ReadIntTxns_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &TransactionService_ServiceDesc.Streams[1], TransactionService_ReadIntTxns_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -128,7 +173,7 @@ func (x *transactionServiceReadIntTxnsClient) Recv() (*IntTxn, error) {
 
 func (c *transactionServiceClient) ReadFloatTxns(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (TransactionService_ReadFloatTxnsClient, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &TransactionService_ServiceDesc.Streams[1], TransactionService_ReadFloatTxns_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &TransactionService_ServiceDesc.Streams[2], TransactionService_ReadFloatTxns_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -161,7 +206,7 @@ func (x *transactionServiceReadFloatTxnsClient) Recv() (*FloatTxn, error) {
 
 func (c *transactionServiceClient) ReadStrTxn(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (TransactionService_ReadStrTxnClient, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &TransactionService_ServiceDesc.Streams[2], TransactionService_ReadStrTxn_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &TransactionService_ServiceDesc.Streams[3], TransactionService_ReadStrTxn_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -194,7 +239,7 @@ func (x *transactionServiceReadStrTxnClient) Recv() (*StrTxn, error) {
 
 func (c *transactionServiceClient) ReadMapTxn(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (TransactionService_ReadMapTxnClient, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &TransactionService_ServiceDesc.Streams[3], TransactionService_ReadMapTxn_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &TransactionService_ServiceDesc.Streams[4], TransactionService_ReadMapTxn_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -229,14 +274,25 @@ func (x *transactionServiceReadMapTxnClient) Recv() (*MapTxn, error) {
 // All implementations must embed UnimplementedTransactionServiceServer
 // for forward compatibility
 type TransactionServiceServer interface {
+	// NOTE: The reason why we have to create a separate rpc for each type
+	// is because we cannot pass interfaces{}. Thus, we won't be able to specify
+	// any value.
+	// Ideally, we should call it only once
+	// One of them should return an error stream.
 	WriteIntTxn(context.Context, *IntTxn) (*emptypb.Empty, error)
 	WriteFloatTxn(context.Context, *FloatTxn) (*emptypb.Empty, error)
 	WriteStrTxn(context.Context, *StrTxn) (*emptypb.Empty, error)
 	WriteMapTxn(context.Context, *MapTxn) (*emptypb.Empty, error)
+	// This procedure has to be called only once to open a stream for errors.
+	ProcessTxnErrors(*emptypb.Empty, TransactionService_ProcessTxnErrorsServer) error
 	// Streaming rpcs: https://grpc.io/docs/languages/go/basics/
+	// Open a stream for Int transactions.
 	ReadIntTxns(*emptypb.Empty, TransactionService_ReadIntTxnsServer) error
+	// Open a stream for Float transactions.
 	ReadFloatTxns(*emptypb.Empty, TransactionService_ReadFloatTxnsServer) error
+	// Open a stream for Str transactions.
 	ReadStrTxn(*emptypb.Empty, TransactionService_ReadStrTxnServer) error
+	// Open a stream for Map transactions.
 	ReadMapTxn(*emptypb.Empty, TransactionService_ReadMapTxnServer) error
 	mustEmbedUnimplementedTransactionServiceServer()
 }
@@ -256,6 +312,9 @@ func (UnimplementedTransactionServiceServer) WriteStrTxn(context.Context, *StrTx
 }
 func (UnimplementedTransactionServiceServer) WriteMapTxn(context.Context, *MapTxn) (*emptypb.Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method WriteMapTxn not implemented")
+}
+func (UnimplementedTransactionServiceServer) ProcessTxnErrors(*emptypb.Empty, TransactionService_ProcessTxnErrorsServer) error {
+	return status.Errorf(codes.Unimplemented, "method ProcessTxnErrors not implemented")
 }
 func (UnimplementedTransactionServiceServer) ReadIntTxns(*emptypb.Empty, TransactionService_ReadIntTxnsServer) error {
 	return status.Errorf(codes.Unimplemented, "method ReadIntTxns not implemented")
@@ -352,6 +411,27 @@ func _TransactionService_WriteMapTxn_Handler(srv interface{}, ctx context.Contex
 		return srv.(TransactionServiceServer).WriteMapTxn(ctx, req.(*MapTxn))
 	}
 	return interceptor(ctx, in, info, handler)
+}
+
+func _TransactionService_ProcessTxnErrors_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(emptypb.Empty)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(TransactionServiceServer).ProcessTxnErrors(m, &transactionServiceProcessTxnErrorsServer{ServerStream: stream})
+}
+
+type TransactionService_ProcessTxnErrorsServer interface {
+	Send(*Error) error
+	grpc.ServerStream
+}
+
+type transactionServiceProcessTxnErrorsServer struct {
+	grpc.ServerStream
+}
+
+func (x *transactionServiceProcessTxnErrorsServer) Send(m *Error) error {
+	return x.ServerStream.SendMsg(m)
 }
 
 func _TransactionService_ReadIntTxns_Handler(srv interface{}, stream grpc.ServerStream) error {
@@ -463,6 +543,11 @@ var TransactionService_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "ProcessTxnErrors",
+			Handler:       _TransactionService_ProcessTxnErrors_Handler,
+			ServerStreams: true,
+		},
 		{
 			StreamName:    "ReadIntTxns",
 			Handler:       _TransactionService_ReadIntTxns_Handler,
