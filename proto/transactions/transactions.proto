@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package transactions;
 
-// option go_package = "github.com/isnastish/kvs/proto";
+option go_package = "github.com/isnastish/kvs/transactions";
 
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/empty.proto";
