@@ -3,14 +3,16 @@ package main
 import (
 	"flag"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/isnastish/kvs/pkg/kvs"
 	"github.com/isnastish/kvs/pkg/log"
-	txn "github.com/isnastish/kvs/proto/transactions"
+	proto "github.com/isnastish/kvs/proto/transactions"
 )
 
 func main() {
@@ -41,7 +43,12 @@ func main() {
 		// NOTE: For development only.
 		// postgres-db is the name of a container running postgresql database on the same network
 		// as our kvs service. The container is specified in compose.yaml file
-		os.Setenv("DATABASE_URL", "postgresql://postgres:nastish@postgres-db:5432/postgres?sslmode=disable")
+
+		// NOTE: For debugging (make sure to run postgreSQL inside the docker container first)
+		os.Setenv("DATABASE_URL", "postgresql://postgres:nastish@localhost:4040/postgres?sslmode=disable")
+
+		// NOTE: For production
+		// os.Setenv("DATABASE_URL", "postgresql://postgres:nastish@postgres-db:5432/postgres?sslmode=disable")
 
 		postgresURL := os.Getenv("DATABASE_URL")
 		if postgresURL == "" {
@@ -59,15 +66,22 @@ func main() {
 
 	settings.TxnLogger = txnLogger
 
-	// Connect to transaction service
 	conn, err := grpc.NewClient(":5051", grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
-		log.Logger.Fatal("Failed to connect to transaction service %v", err)
+		log.Logger.Fatal("Failed to connect to txn service %v", err)
 	}
 
-	txnClient := txn.NewTransactionServiceClient(conn)
+	go func() {
+		// TODO: Add a function for gracefully shutting down the service,
+		// and remove kill endpoint.
+		service := kvs.NewService(&settings, proto.NewTransactionServiceClient(conn))
+		service.Run()
+	}()
 
-	service := kvs.NewService(&settings)
-	service.Run()
+	osSignalChan := make(chan os.Signal, 1)
+	signal.Notify(osSignalChan, syscall.SIGINT, syscall.SIGTERM)
+	<-osSignalChan
+	// service.Close()
+
 	os.Exit(0)
 }
