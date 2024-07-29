@@ -601,25 +601,55 @@ func NewService(settings *ServiceSettings, txnClient txn.TransactionServiceClien
 	service.storage[storageString] = newStrStorage()
 	service.storage[storageMap] = newMapStorage()
 
-	// NOTE: It's suffice to use background context for now.
-	stream, err := service.txnClient.ProcessTxnErrors(context.Background(), &emptypb.Empty{})
+	// Open an error stream to read all the errors coming from txn service
+	errStream, err := service.txnClient.ProcessTxnErrors(context.Background(), &emptypb.Empty{})
 	if err != nil {
 		log.Logger.Fatal("Failed to open an error stream %v", err)
 	}
 
 	// NOTE: This goroutine should be executed on the background and listen for any
 	// errors coming from txn service.
-	go func() {
-		for {
-			resp, err := stream.Recv()
-			if err != nil {
-				// Could io.EOF which is unexpected, we should never receive io.EOF from this stream
-				log.Logger.Error("Failed to receive from the error stream %v", err)
-				return
+	for {
+		resp, err := errStream.Recv()
+		if err != nil {
+			if err == io.EOF {
+				break
 			}
-			// What do we do with the error which came from the txn service?
+			log.Logger.Fatal("Failed to read from the error stream %v", err)
 		}
-	}()
+		log.Logger.Info("Error received %s", resp.Message)
+	}
+
+	intTxnStream, err := service.txnClient.ReadIntTxns(context.Background(), &emptypb.Empty{})
+	if err != nil {
+		log.Logger.Fatal("Failed to open a stream for reading int transactions %v", err)
+	}
+
+	for {
+		resp, err := intTxnStream.Recv()
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			log.Logger.Fatal("Failed to read from int transactions stream %v", err)
+		}
+		log.Logger.Info("Key: %s, Value: %d", resp.Base.Key, resp.Value)
+	}
+
+	if _, err := service.txnClient.WriteIntTxn(
+		context.Background(),
+		&txn.IntTxn{Base: &txn.TxnBase{TxnType: txn.TxnType_TXN_PUT, Key: "key_for_my_value"}, Value: -789987},
+	); err != nil {
+		log.Logger.Fatal("Failed to make int transactio")
+	}
+
+	if _, err := service.txnClient.WriteMapTxn(
+		context.Background(),
+		&txn.MapTxn{Base: &txn.TxnBase{TxnType: txn.TxnType_TXN_PUT, Key: "key_map"},
+			Value: map[string]string{"_first_key_": "_first_value", "_second_key": "_second_value"}},
+	); err != nil {
+		log.Logger.Fatal("Failed to make int transaction")
+	}
 
 	// NOTE: This has to be executed after both transaction logger AND the storage is initialized
 	if err := service.processSavedTransactions(); err != nil {

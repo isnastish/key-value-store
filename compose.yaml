@@ -1,28 +1,43 @@
+# kvs-service (key-value storage) depends on tnx-service (transactions service), 
+# at the same time txn-service depends on postgresql-db.
+# KVS---Txn---postgres-db 
+
 services:
   kvs:
     container_name: "kvs-service"
     image: 'kvs:latest'
     build: 
-      context: ./
+      context: ./Dockerfile.kvs
     ports:
       # Port 8080 is accessible for servier-to-service communication, 
       # and the same port is available for accessing the container from outside the network.
       # locahost has to be specified, otherwise some weird things happening, 
       # only occasionally I can reach the endpoint from outside, using other clients (python for example).
       - "127.0.0.1:8080:8080"
+    
     depends_on:
-      postgres-db:
-        condition: service_healthy
+      - txn
+      # TODO: Add the condition once the txn service supports health check.
+      # condition: service_healthy
     networks:
       - backend
 
-  txn-service:
-    # It should have its own docker image.
-    # It should depend on the postgresql database container
-    # kvs-service should be dependent on txn-service (and won't start until both postgres-database and txn-service are healthy).
-    # and the service has to be healthy.
-    # We should verify whether it's healthy every 5seconds or so.
-    container_name: transaction-service
+  txn:
+   # https://grpc.io/docs/guides/health-checking/
+   # TODO: Health check using gRPC's Watch endpoint
+    container_name: "transaction-service"
+    image: 'txn:latest'
+    build: 
+      context: ./Dockerfile.txn
+    ports:
+      - "5051:5051"
+
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+
+    networks:
+      - backend
 
   postgres-db:
     image: 'postgres:16.3'
@@ -37,7 +52,7 @@ services:
       # docker container it should use URL: postgres://...@postgres-db:CONTAINER_PORT/...
       - "4040:5432"
     environment:
-      # Define environment variables inside the container. 
+      # Define environment variables inside the container.
       # It can come from .env file as well using env_file: directive.
       - POSTGRES_PORT=5432
       - POSTGRES_USER=postgres

@@ -9,31 +9,12 @@ import "google/protobuf/empty.proto";
 import "google/protobuf/struct.proto";
 
 service TransactionService {
-    // NOTE: The reason why we have to create a separate rpc for each type
-    // is because we cannot pass interfaces{}. Thus, we won't be able to specify
-    // any value.
-    // Ideally, we should call it only once 
-    // One of them should return an error stream.
-    rpc WriteIntTxn(IntTxn) returns (google.protobuf.Empty);
-    rpc WriteFloatTxn(FloatTxn) returns (google.protobuf.Empty);
-    rpc WriteStrTxn(StrTxn) returns (google.protobuf.Empty);
-    rpc WriteMapTxn(MapTxn) returns (google.protobuf.Empty);
+    // Should be a stream?
+    rpc WriteTransaction(Transaction) returns (google.protobuf.Empty);
 
-    // This procedure has to be called only once to open a stream for errors.
-    rpc ProcessTxnErrors(google.protobuf.Empty) returns (stream Error);
+    rpc ProcessErrors(google.protobuf.Empty) returns (stream Error);
 
-    // Streaming rpcs: https://grpc.io/docs/languages/go/basics/
-    // Open a stream for Int transactions.
-    rpc ReadIntTxns(google.protobuf.Empty) returns (stream IntTxn);
-
-    // Open a stream for Float transactions.
-    rpc ReadFloatTxns(google.protobuf.Empty) returns (stream FloatTxn);
-
-    // Open a stream for Str transactions.
-    rpc ReadStrTxn(google.protobuf.Empty) returns (stream StrTxn);
-
-    // Open a stream for Map transactions.
-    rpc ReadMapTxn(google.protobuf.Empty) returns (stream MapTxn);
+    rpc ReadTransactions(google.protobuf.Empty) returns (stream Transaction);
 }
 
 enum TxnType {
@@ -44,32 +25,27 @@ enum TxnType {
     TXN_INCR_BY = 4;
 }
 
+enum StorageType {
+    INT_STORAGE  = 0;
+    FLOAT_STORAGE = 1;
+    UINT_STORAGE = 2;
+    STR_STORAGE = 3;
+    MAP_STORAGE = 4;
+}
+
+message Transaction {
+    TxnType txnType = 1;
+    StorageType storageType = 2;
+    google.protobuf.Timestamp timestamp = 3;
+    string key = 4;
+    oneof value {
+        int32 intValue = 5;
+        double float64Value = 6;
+        string strValue = 7;
+        google.protobuf.Struct mapValue = 8;
+    }
+}
+
 message Error {
     string message = 1;
-}
-
-message TxnBase {
-    TxnType txnType = 1;
-    google.protobuf.Timestamp timestamp = 2;
-    string key = 3;
-}
-
-message IntTxn {
-    TxnBase base = 1;
-    int32 value = 2; 
-}
-
-message FloatTxn {
-    TxnBase base = 1;
-    float value = 2;
-}
-
-message StrTxn {
-    TxnBase base = 1;
-    string value = 2;
-}
-
-message MapTxn {
-    TxnBase base = 1;
-    google.protobuf.Struct data = 2;
 }
