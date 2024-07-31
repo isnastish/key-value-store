@@ -10,15 +10,25 @@ the server exposes some other endpoints for testing the connectivity and deletin
 
 [comment]: <> (Describe what happens when an error encountered when we hit storage's endpoint, and which status code is returned on success.)
 
-[comment]: <> (Specify that each storage maintains a set of handlers, put/get and deleter handlers.)
+[comment]: <> (Specify that each storage maintains a set of handlers, put/get and delete handlers.)
 
 ### Storage
+Currently, the storage is capable of handling 5 data types, 32-bit signed/unsigned integers, floats, strings, and hash maps of type `map[string]string` in a Golang world. Each storage is represented as an interface of the following form 
+```go
+type Storage interface {
+	Put(key string, cmd *CmdResult) *CmdResult
+	Get(key string, cmd *CmdResult) *CmdResult
+	Del(key string, CmdResult *CmdResult) *CmdResult
+}
+```
+`Put` method is used to insert elements into the storage, `Get` to delete elements from the storage and `Del` to delete keys from the storage respectively. Every storage is a map from a string toan  underlying type that it holds, and protected with `sync.RWMutex`. 
+
 
 ## KVS Client
 
 
 ## Transaction service (TXN)
 
-### PostgreSQL database transactions
+### PostgreSQL database transaction handling
 
-### File transactions
+### File transaction handling
