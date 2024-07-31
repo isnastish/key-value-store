@@ -23,8 +23,32 @@ type Storage interface {
 ```
 `Put` method is used to insert elements into the storage, `Get` to delete elements from the storage and `Del` to delete keys from the storage respectively. Every storage is a map from a string toan  underlying type that it holds, and protected with `sync.RWMutex`. 
 
-
 ## KVS Client
+The Go client is an abstraction which incapsulates methods for interacting with KVS service. A call to the kvs service is made in multiple stages, first we process all the arguments passed to an api function, then build uniform resrouce identifier, initializing the body and HTTP headers (if present), and the last step is to make a request to the service. If the service responds with one of status codes: `http.StatusBadGateway, http.StatusTooManyRequests, http.StatusTooEarly, http.StatusGatewayTimeout, http.StatusRequestTimeout, http.StatusServiceUnavailable` the request is retried until we exceed the amount of retries or get a response `http.StatusOK` back. There are five different result types that can be returned from the api functions, each of them corresponds to a storage type that we interact with. This is how they implemented in Golang, 
+but for the python client that would be equivalent.
+```go
+type MapCmd struct {
+	baseCmd
+	result map[string]string
+}
+type IntCmd struct {
+	baseCmd
+	result int
+}
+type StrCmd struct {
+	baseCmd
+	result string
+}
+type FloatCmd struct {
+	baseCmd
+	result float32
+}
+type BoolCmd struct {
+	baseCmd
+	result bool
+}
+```
+All `put` operations will return a result of type `IntCmd` regardless of the underlying storage type. A `result` member will contain a status code returned by the service, and an `error` field will contain an error, if any. Every `delete` operation will return a result of type `BoolCmd` with the `result` member set to true if the key was deleted, otherwise it didn't exist in the storage. This behaviour is equivalent for the python client as well. As for the `get` operations, the result will correspond to a type of the underlying storage. For example, when requesting values from the map storage, a result of type `MapCmd` will be returned with the result member holding an actual value, assuming no error accured and the request succeeded. For the float storage it would be `FloatCmd` etc.
 
 
 ## Transaction service (TXN)
