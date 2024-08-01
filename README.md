@@ -1,20 +1,14 @@
 ## Overview
-KVS is a remote key-value storage written in Golang. Currently it supports storing POD types, like integers, 32-bit floats, strings and hashmaps of type `map[string]string`, but I am planning to extend the functionality in the future and use it in my chat application as a replacement or alternative for a redis backend. The application is based around REST api and all the operations on a storage are done through the basic HTTP calls, which should be replaced with remote procedural calls using gRPC (it has a lot of room for improvements, which I left for myself, or for a reader, as an exercise). The architecutre document will be added as soon as I find the time for it.
+KVS is a distributed key-value storage service written in Golang. It provides a functionality for storing pod data types in-memory of a separate process, potentially running on a remote machine. Currently it is capable of handling 32-bit signed/unsigned integers, 32-bit floats, strings, sets, and hash maps of type `map[string]string, or dict[str, str]`, but that would be extended in the future releases with an ebility to store custom structs and maps of any type. The service utilises REST API for communication with its clients, either Python or Golang, and [gRPC](https://grpc.io/) framework for interacting with another internal service for handling transactions. The transaction service (TXN) is responsbile for persisting all the requests, made to key-value storage, in a PostgreSQL database or in a binary file. That way, the state of the storage can be recreated by reading all the transactions from the database, in case the service crashes abnormally. TXN service is run in a separate docker container. 
 
-## Running KVS service in a docker container
-In order to run a KVS service in a docker container and execute tests against it you should have docker installed on your machine. If you do, build a docker image with the following command `docker build --tag kvs:1.0.0 .`. A dot at the end is important, it's a hint to a docker where to search for a `.Dockerfile`, which is in the root directory of our project. After building the image, run `docker run --rm -ti --name=kvs-service kvs:1.0.0`. If you have done everything correctly, you should see the logs that the service is listening on a port `:8080`. 
-```log
-{"level":"info","timestamp":"Sat Jun 22 18:17:15 UTC 2024","message":"Listening :8080"}
-```
-Now, go to visual studio and execute any client's test. You can do it via the terminal with `go test ./... -count=1` command  as well. You should see the logs comming from the kvs service running in the docker container.
-```log
-{"level":"info","timestamp":"Sat Jun 22 16:52:48 UTC 2024","message":"Endpoint /api/v1-0-0/strget/dummy_String, method GET"}
-{"level":"info","timestamp":"Sat Jun 22 16:52:48 UTC 2024","message":"Endpoint /api/v1-0-0/mapput/randomMap, method PUT"}
-{"level":"info","timestamp":"Sat Jun 22 16:52:48 UTC 2024","message":"Endpoint /api/v1-0-0/mapget/randomMap, method GET"}
-{"level":"info","timestamp":"Sat Jun 22 16:52:48 UTC 2024","message":"Endpoint /api/v1-0-0/mapdel/randomMap, method DELETE"}
-...
-...
-```
+## Running KVS service
+Running key-value storage service is very straightforward and only requires [Docker](https://www.docker.com/products/docker-desktop/) to be installed on your machine. Once that is done, run `docker compose up` inside a root directory. That will spin up two docker containers, the first one running `PostgreSQL` database, and the second one running our key-value storage application. Everything is configured inside a docker [compose.yaml](https://github.com/isnastish/kvs/blob/master/compose.yaml) file.
+If you see these logs as a result of executing the command above, you have done everything correctly and your kvs service is up and running together with PostgreSQL database for handling transactions.
+![alt text](image.png)
 
-## Inspiration
-I highly recommend reading this book [Cloud-Native-Go](https://www.amazon.ca/Cloud-Native-Go-Unreliable-Environments/dp/1492076333) If you want to learn more about cloud native and Golang in general. This is where my inspiration came from.
+## Testing the api
+Once your service is running, the simplest way of testing the storage would be to clone a KVS Python client repository and execute any cli command, `python -m kvs.cli echo "Hello From the Client"`, for instance. More information can be found here [using python client to test kvs service](https://github.com/isnastish/kvs-python-client), or you can run any test inside the Go client package with `go test`.
+
+
+
+> **NOTE:** [feature/transactions-service](https://github.com/isnastish/kvs/tree/feature/transactions-service?tab=readme-ov-file) branch contains the integration for TXN service using `gRPC` framework and is currently in development.
