@@ -9,7 +9,7 @@ type TxnType string
 const (
 	txnPut    TxnType = "put"
 	txnGet    TxnType = "get"
-	txnDelete TxnType = "delete"
+	txnDel    TxnType = "delete"
 	txnIncr   TxnType = "incr"
 	txnIncrBy TxnType = "incrby"
 )

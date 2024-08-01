@@ -56,7 +56,6 @@ type CmdResult struct {
 	storageType StorageType
 	args        []interface{}
 	result      interface{}
-	deleted     bool
 	err         error
 }
 
@@ -124,13 +123,11 @@ func (s *MapStorage) Get(hashKey string, cmd *CmdResult) *CmdResult {
 
 func (s *MapStorage) Del(hashKey string, cmd *CmdResult) *CmdResult {
 	s.Lock()
-	_, exists := s.data[hashKey]
+	_, deleted := s.data[hashKey]
 	delete(s.data, hashKey)
 	s.Unlock()
 	cmd.storageType = storageMap
-	// If the value existed before deletion, cmd.deleted is set to true,
-	// false otherwise, so that on the client side we can determine whether the operation modified the storage or not.
-	cmd.deleted = exists
+	cmd.result = deleted
 	return cmd
 }
 
@@ -157,11 +154,11 @@ func (s *StrStorage) Get(hashKey string, cmd *CmdResult) *CmdResult {
 
 func (s *StrStorage) Del(hashKey string, cmd *CmdResult) *CmdResult {
 	s.Lock()
-	_, exists := s.data[hashKey]
+	_, deleted := s.data[hashKey]
 	delete(s.data, hashKey)
 	s.Unlock()
 	cmd.storageType = storageString
-	cmd.deleted = exists
+	cmd.result = deleted
 	return cmd
 }
 
@@ -188,11 +185,11 @@ func (s *IntStorage) Get(hashKey string, cmd *CmdResult) *CmdResult {
 
 func (s *IntStorage) Del(hashKey string, cmd *CmdResult) *CmdResult {
 	s.Lock()
-	_, exists := s.data[hashKey]
+	_, deleted := s.data[hashKey]
 	delete(s.data, hashKey)
 	s.Unlock()
 	cmd.storageType = storageInt
-	cmd.deleted = exists
+	cmd.result = deleted
 	return cmd
 }
 
@@ -233,8 +230,6 @@ func (s *IntStorage) IncrBy(hashKey string, cmd *CmdResult) *CmdResult {
 
 func (s *FloatStorage) Put(hashKey string, cmd *CmdResult) *CmdResult {
 	s.Lock()
-	// Consider the precision in the future. Maybe we have to suply the precision
-	// together with the value itself
 	s.data[hashKey] = float32(cmd.args[0].(float32))
 	s.Unlock()
 	cmd.storageType = storageFloat
@@ -256,10 +251,41 @@ func (s *FloatStorage) Get(hashKey string, cmd *CmdResult) *CmdResult {
 
 func (s *FloatStorage) Del(hashKey string, cmd *CmdResult) *CmdResult {
 	s.Lock()
-	_, exists := s.data[hashKey]
+	_, deleted := s.data[hashKey]
 	delete(s.data, hashKey)
 	s.Unlock()
 	cmd.storageType = storageFloat
-	cmd.deleted = exists
+	cmd.result = deleted
+	return cmd
+}
+
+func (s *UintStorage) Put(key string, cmd *CmdResult) *CmdResult {
+	s.Lock()
+	s.data[key] = cmd.args[0].(uint32)
+	s.Unlock()
+	cmd.storageType = storageUint
+	return cmd
+}
+
+func (s *UintStorage) Get(key string, cmd *CmdResult) *CmdResult {
+	s.RLock()
+	val, exists := s.data[key]
+	s.RUnlock()
+	cmd.storageType = storageUint
+	if !exists {
+		cmd.err = errors.NotFoundf("Key %s", key)
+		return cmd
+	}
+	cmd.result = val
+	return cmd
+}
+
+func (s *UintStorage) Del(key string, cmd *CmdResult) *CmdResult {
+	s.Lock()
+	_, deleted := s.data[key]
+	delete(s.data, key)
+	s.Unlock()
+	cmd.storageType = storageUint
+	cmd.result = deleted
 	return cmd
 }

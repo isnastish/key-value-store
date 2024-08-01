@@ -9,7 +9,6 @@ import (
 	"net/url"
 	"strconv"
 	"time"
-	_ "time"
 	"unicode"
 
 	"github.com/gorilla/mux"
@@ -98,15 +97,9 @@ func (s *Service) stringDeleteHandler(w http.ResponseWriter, req *http.Request) 
 
 	key := mux.Vars(req)["key"]
 	cmd := s.storage[storageString].Del(key, newCmdResult())
-	if cmd.err != nil {
-		http.Error(w, cmd.err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	s.writeTransaction(txnDelete, storageString, key, nil)
-
-	if cmd.deleted {
-		w.Header().Add("Deleted", "1")
+	if cmd.result.(bool) {
+		w.Header().Add("Deleted", "true")
+		s.writeTransaction(txnDel, storageString, key, nil)
 	}
 
 	w.WriteHeader(http.StatusOK)
@@ -169,15 +162,11 @@ func (s *Service) mapDeleteHandler(w http.ResponseWriter, req *http.Request) {
 
 	key := mux.Vars(req)["key"]
 	cmd := s.storage[storageMap].Del(key, newCmdResult())
-	if cmd.err != nil {
-		http.Error(w, cmd.err.Error(), http.StatusInternalServerError)
-		return
+	if cmd.result.(bool) {
+		w.Header().Add("Deleted", "true")
+		s.writeTransaction(txnDel, storageMap, key, nil)
 	}
-	s.writeTransaction(txnDelete, storageMap, key, nil)
 
-	if cmd.deleted {
-		w.Header().Add("Deleted", "1")
-	}
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -228,15 +217,11 @@ func (s *Service) intDeleteHandler(w http.ResponseWriter, req *http.Request) {
 
 	key := mux.Vars(req)["key"]
 	cmd := s.storage[storageInt].Del(key, newCmdResult())
-	if cmd.err != nil {
-		http.Error(w, cmd.err.Error(), http.StatusInternalServerError)
-		return
+	if cmd.result.(bool) {
+		w.Header().Add("Deleted", "true")
+		s.writeTransaction(txnDel, storageInt, key, nil)
 	}
-	s.writeTransaction(txnDelete, storageInt, key, nil)
 
-	if cmd.deleted {
-		w.Header().Add("Deleted", "1")
-	}
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -338,27 +323,73 @@ func (s *Service) floatDeleteHandler(w http.ResponseWriter, req *http.Request) {
 
 	key := mux.Vars(req)["key"]
 	cmd := s.storage[storageFloat].Del(key, newCmdResult())
-	if cmd.err != nil {
-		http.Error(w, cmd.err.Error(), http.StatusInternalServerError)
-		return
+	if cmd.result.(bool) {
+		w.Header().Add("Deleted", "true")
+		s.writeTransaction(txnDel, storageFloat, key, nil)
 	}
-	if cmd.deleted {
-		w.Header().Add("Deleted", "1")
-	}
-	s.writeTransaction(txnDelete, storageFloat, key, nil)
+
 	w.WriteHeader(http.StatusOK)
 }
 
-func (s *Service) uintPutHandler(w http.ResponseWriter, r *http.Request) {
+func (s *Service) uintPutHandler(w http.ResponseWriter, req *http.Request) {
+	logOnEndpointHit(req.RequestURI, req.Method, req.RemoteAddr)
+
+	key := mux.Vars(req)["key"]
+
+	// TODO: The value should be a part of a query string, so we don't need to read the body.
+	body, err := io.ReadAll(req.Body)
+	if err != nil {
+		err := fmt.Errorf("uint storage: Failed to read the request body %v", err)
+		log.Logger.Error(err.Error())
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	res, err := strconv.ParseUint(string(body), 10, 32)
+	if err != nil {
+		err := fmt.Errorf("uint storage: Failed to parse the value %v", err)
+		log.Logger.Error(err.Error())
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	value := uint32(res)
+	cmd := s.storage[storageUint].Put(key, newCmdResult(value))
+	_ = cmd
+
+	s.writeTransaction(txnPut, storageUint, key, value)
 	log.Logger.Info("Uint32 PUT endpoint is not implemented yet")
 }
 
-func (s *Service) uintGetHandler(w http.ResponseWriter, r *http.Request) {
-	log.Logger.Info("Uint32 GET endpoint is not implemented yet")
+func (s *Service) uintGetHandler(w http.ResponseWriter, req *http.Request) {
+	logOnEndpointHit(req.RequestURI, req.Method, req.RemoteAddr)
+
+	key := mux.Vars(req)["key"]
+
+	cmd := s.storage[storageUint].Get(key, newCmdResult())
+	if cmd.err != nil {
+		err := fmt.Errorf("uint storage: %v", cmd.err)
+		log.Logger.Error(err.Error())
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	s.writeTransaction(txnGet, storageUint, key, nil)
+
+	w.Write([]byte(strconv.FormatUint(cmd.result.(uint64), 32)))
 }
 
-func (s *Service) uintDelHandler(w http.ResponseWriter, r *http.Request) {
-	log.Logger.Info("Uint32 DELETE endpoint is not implemented yet")
+func (s *Service) uintDelHandler(w http.ResponseWriter, req *http.Request) {
+	logOnEndpointHit(req.RequestURI, req.Method, req.RemoteAddr)
+
+	key := mux.Vars(req)["key"]
+
+	cmd := s.storage[storageUint].Del(key, newCmdResult())
+	if cmd.result.(bool) {
+		w.Header().Add("Deleter", "true")
+		s.writeTransaction(txnDel, storageUint, key, nil)
+	}
+
+	w.WriteHeader(http.StatusOK)
 }
 
 func (s *Service) delKeyHandler(w http.ResponseWriter, req *http.Request) {
@@ -367,9 +398,9 @@ func (s *Service) delKeyHandler(w http.ResponseWriter, req *http.Request) {
 	key := mux.Vars(req)["key"]
 	for _, storage := range s.storage {
 		cmd := storage.Del(key, newCmdResult())
-		if cmd.deleted {
-			w.Header().Add("Deleter", "1")
-			s.writeTransaction(txnDelete, cmd.storageType, key, nil)
+		if cmd.result.(bool) {
+			w.Header().Add("Deleter", "true")
+			s.writeTransaction(txnDel, cmd.storageType, key, nil)
 			break
 		}
 	}
@@ -500,7 +531,7 @@ func (s *Service) processSavedTransactions() error {
 				cmd := s.storage[event.storageType].Get(event.key, newCmdResult())
 				err = cmd.err
 
-			case txnDelete:
+			case txnDel:
 				cmd := s.storage[event.storageType].Del(event.key, newCmdResult())
 				err = cmd.err
 
@@ -610,6 +641,7 @@ func (s *Service) Run() {
 		subrouter.Path("/" + hd.funcName).HandlerFunc(hd.cb).Methods(hd.method)
 	}
 
+	// TODO: Rewrite endpoints with /map/put/key/..., /map/get/key/...
 	subrouter.Path("/map-put/{key:[0-9A-Za-z_]+}").HandlerFunc(s.mapPutHandler).Methods("PUT")
 	subrouter.Path("/map-get/{key:[0-9A-Za-z_]+}").HandlerFunc(s.mapGetHandler).Methods("GET")
 	subrouter.Path("/map-del/{key:[0-9A-Za-z_]+}").HandlerFunc(s.mapDeleteHandler).Methods("DELETE")
@@ -628,9 +660,10 @@ func (s *Service) Run() {
 	subrouter.Path("/float-get/{key:[0-9A-Za-z_]+}").HandlerFunc(s.floatGetHandler).Methods("GET")
 	subrouter.Path("/float-del/{key:[0-9A-Za-z_]+}").HandlerFunc(s.floatDeleteHandler).Methods("DELETE")
 
-	subrouter.Path("/uint-put/{key:[0-9A-Za-z_]+}").HandlerFunc(s.uintPutHandler).Methods("PUT")
-	subrouter.Path("/uint-add/{key:[0-9A-Za-z_]+}").HandlerFunc(s.uintGetHandler).Methods("GET")
-	subrouter.Path("/uint-del/{key:[0-9A-Za-z_]+}").HandlerFunc(s.uintDelHandler).Methods("DELETE")
+	// NOTE: Can we remove put/add/del and only rely on HTTP method?
+	subrouter.Path("/uint/put/{key:[0-9A-Za-z_]+}").HandlerFunc(s.uintPutHandler).Methods("PUT")
+	subrouter.Path("/uint/add/{key:[0-9A-Za-z_]+}").HandlerFunc(s.uintGetHandler).Methods("GET")
+	subrouter.Path("/uint/del/{key:[0-9A-Za-z_]+}").HandlerFunc(s.uintDelHandler).Methods("DELETE")
 
 	// Endpoint to delete a key from any type of storage
 	subrouter.Path("/del/{key:[0-9A-Za-z_]+}").HandlerFunc(s.delKeyHandler).Methods("DELETE")
