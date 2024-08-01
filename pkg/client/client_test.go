@@ -88,17 +88,6 @@ func TestHello(t *testing.T) {
 	assert.True(t, strings.Contains(res.Result(), "kvs"))
 }
 
-func TestKillService(t *testing.T) {
-	// defer goleak.VerifyNone(t)
-	settings := Settings{Endpoint: endpoint, RetriesCount: 3}
-	client := NewClient(&settings)
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	res := client.Kill(ctx)
-	assert.True(t, res.Error() == nil)
-	assert.Equal(t, 200, res.statusCode)
-}
-
 func TestFibo(t *testing.T) {
 	// defer goleak.VerifyNone(t)
 	// Fibo rpc is a great way of testing request cancelation with a context

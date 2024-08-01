@@ -570,6 +570,18 @@ func NewService(settings *ServiceSettings) *Service {
 	return service
 }
 
+func (s *Service) Close() {
+	if s.running {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := s.Server.Shutdown(ctx); err != nil {
+			if err != context.DeadlineExceeded {
+				log.Logger.Fatal("Failed to shut down a server %v", err)
+			}
+		}
+	}
+}
+
 func (s *Service) Run() {
 	defer s.txnLogger.Close()
 
@@ -620,39 +632,13 @@ func (s *Service) Run() {
 	subrouter.Path("/uint-add/{key:[0-9A-Za-z_]+}").HandlerFunc(s.uintGetHandler).Methods("GET")
 	subrouter.Path("/uint-del/{key:[0-9A-Za-z_]+}").HandlerFunc(s.uintDelHandler).Methods("DELETE")
 
-	triggerShutdown := make(chan bool)
-	shutdownCompleted := make(chan bool)
-	go func() {
-		<-triggerShutdown
-		// When Shutdown is called, [Serve], [ListenAndServe], and [ListenAndServeTLS] immediately return [ErrServerClosed].
-		// Make sure the program doesn't exit and waits instead for Shutdown to return.
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := s.Server.Shutdown(ctx); err != nil {
-			if err != context.DeadlineExceeded {
-				log.Logger.Error("Failed to shutdown the server %v", err)
-			}
-		}
-		close(shutdownCompleted)
-	}()
-
 	// Endpoint to delete a key from any type of storage
 	subrouter.Path("/del/{key:[0-9A-Za-z_]+}").HandlerFunc(s.delKeyHandler).Methods("DELETE")
-
-	subrouter.Path("/kill").HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		logOnEndpointHit(req.RequestURI, req.Method, req.RemoteAddr)
-		w.WriteHeader(http.StatusOK)
-		close(triggerShutdown)
-	}).Methods("POST")
 
 	s.Server.Handler = router
 
 	log.Logger.Info("%s:%s service is running %s", info.ServiceName(), info.ServiceVersion(), s.settings.Endpoint)
 	if err := s.Server.ListenAndServe(); err != http.ErrServerClosed {
-		log.Logger.Error("Server terminated abnormally %v", err)
-	} else {
-		log.Logger.Info("Server was closed gracefully")
+		log.Logger.Fatal("Server terminated abnormally %v", err)
 	}
-
-	<-shutdownCompleted
 }

@@ -3,7 +3,9 @@ package main
 import (
 	"flag"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/isnastish/kvs/pkg/kvs"
 	"github.com/isnastish/kvs/pkg/log"
@@ -56,5 +58,15 @@ func main() {
 	settings.TxnLogger = txnLogger
 
 	service := kvs.NewService(&settings)
-	service.Run()
+
+	go func() {
+		service.Run()
+	}()
+
+	osSignalChan := make(chan os.Signal, 1)
+	signal.Notify(osSignalChan, syscall.SIGINT, syscall.SIGTERM)
+	<-osSignalChan
+	service.Close()
+
+	log.Logger.Info("Service shut down gracefully")
 }

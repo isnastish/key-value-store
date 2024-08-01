@@ -39,7 +39,7 @@ const (
 	cmdEcho  = "echo"
 	cmdHello = "hello"
 	cmdFibo  = "fibo"
-	cmdKill  = "kill"
+	// cmdKill  = "kill"
 )
 
 type IntCmdCallback func(c *Client, ctx context.Context, cmd *IntCmd) *IntCmd
@@ -154,8 +154,6 @@ func init() {
 	cmdCallbacksTable.boolCbTable[cmdStrDel] = strDelCommand
 	cmdCallbacksTable.boolCbTable[cmdMapDel] = mapDelCommand
 	cmdCallbacksTable.boolCbTable[cmdF32Del] = f32DelCommand
-	// callback for killing the server
-	cmdCallbacksTable.boolCbTable[cmdKill] = killCommand
 	// del a key from any type of storage
 	cmdCallbacksTable.boolCbTable[cmdDel] = delCommand
 
@@ -261,14 +259,6 @@ func (c *Client) Fibo(ctx context.Context, n int) *IntCmd {
 	extendArgs(args, cmdFibo, n)
 	cmd := newIntCmd(args...)
 	cmdCallbacksTable.intCbtable[cmdFibo](c, ctx, cmd)
-	return cmd
-}
-
-func (c *Client) Kill(ctx context.Context) *BoolCmd {
-	args := make([]interface{}, 1)
-	args[0] = cmdKill
-	cmd := newBoolCmd(args...)
-	cmdCallbacksTable.boolCbTable[cmdKill](c, ctx, cmd)
 	return cmd
 }
 
@@ -427,17 +417,6 @@ func fiboCommand(client *Client, ctx context.Context, cmd *IntCmd) *IntCmd {
 		return cmd
 	}
 	cmd.result, _ = strconv.Atoi(string(r.contents))
-	return cmd
-}
-
-func killCommand(client *Client, ctx context.Context, cmd *BoolCmd) *BoolCmd {
-	url := client.baseURL.JoinPath(cmd.args[0].(string))
-	r := client.httpRequest(ctx, http.MethodPost, url, nil, nil)
-	cmd.httpStatus = r.httpStatus
-	if r.err != nil {
-		return cmd
-	}
-	cmd.result = (r.statusCode == 200)
 	return cmd
 }
 
