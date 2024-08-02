@@ -7,8 +7,12 @@ import (
 	"strings"
 	"syscall"
 
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+
 	"github.com/isnastish/kvs/pkg/kvs"
 	"github.com/isnastish/kvs/pkg/log"
+	"github.com/isnastish/kvs/proto/api"
 )
 
 func main() {
@@ -57,7 +61,15 @@ func main() {
 
 	settings.TxnLogger = txnLogger
 
-	service := kvs.NewService(&settings)
+	///////////////////////////////////////gRPC///////////////////////////////////////
+	// This could be moved to NewService() function
+	grpcClient, err := grpc.NewClient("localhost:5051", grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		log.Logger.Fatal("Failed to create a grpc client %v", err)
+	}
+	defer grpcClient.Close()
+
+	service := kvs.NewService(&settings, api.NewTransactionServiceClient(grpcClient))
 
 	go func() {
 		service.Run()
