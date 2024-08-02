@@ -78,8 +78,8 @@ func main() {
 	service := kvs.NewService(&settings, api.NewTransactionServiceClient(grpcClient))
 
 	doneChan := make(chan bool, 1)
-
 	osSigChan := make(chan os.Signal, 1)
+
 	signal.Notify(osSigChan, syscall.SIGINT, syscall.SIGTERM)
 
 	go func() {

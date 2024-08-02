@@ -639,6 +639,9 @@ func (s *Service) Run() error {
 		return fmt.Errorf("Failed to open an error stream %v", err)
 	}
 
+	// NOTE: If we receive an os signal, this goroutine will be leaked.
+	// We should provide a mechanism how to stop this goroutine,
+	// the easiest way of doing that would be to make txnErrorChan a member of a Service struct.
 	txnErrorChan := make(chan error, 1)
 	go func() {
 		defer close(txnErrorChan)

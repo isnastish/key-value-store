@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"google.golang.org/grpc"
@@ -20,13 +22,15 @@ import (
 
 type TransactionLogger interface {
 	WriteTransaction(event *api.Event)
+	// Or we can pass a stream directly and process all the transactions inside ReadTransactions call function.
+	ReadTransactions() (<-chan *api.Event, <-chan *api.Error)
 	ProcessIncomingEvents()
 }
 
 type PostgresTransationLogger struct {
 	EventChan chan *api.Event
-	// ErrorChan chan
-	ConnPool *pgxpool.Pool
+	ErrorChan chan *api.Error
+	ConnPool  *pgxpool.Pool
 }
 
 func (l *PostgresTransationLogger) WriteTransaction(event *api.Event) {
@@ -34,11 +38,56 @@ func (l *PostgresTransationLogger) WriteTransaction(event *api.Event) {
 }
 
 func (l *PostgresTransationLogger) ProcessIncomingEvents() {
+}
+
+func (l *PostgresTransationLogger) ReadTransactions(stream api.TransactionService_ReadTransactionsServer) {
 
 }
 
-func NewPostgresTransactionLogger() {
+func (l *PostgresTransationLogger) createTablesIfDontExist() error {
+	return nil
+}
 
+func NewPostgresTransactionLogger(databaseUrl string) (*PostgresTransationLogger, error) {
+	dbconfig, err := pgxpool.ParseConfig(databaseUrl)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build a config %w", err)
+	}
+
+	dbconfig.BeforeAcquire = func(ctx context.Context, conn *pgx.Conn) bool {
+		log.Logger.Info("Before acquiring connection from the pool")
+		return true
+	}
+
+	dbconfig.AfterRelease = func(conn *pgx.Conn) bool {
+		log.Logger.Info("After releasing connection from the pool")
+		return true
+	}
+
+	dbconfig.BeforeClose = func(conn *pgx.Conn) {
+		log.Logger.Info("Closing the connection")
+	}
+
+	connPool, err := pgxpool.NewWithConfig(context.Background(), dbconfig)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := connPool.Ping(context.Background()); err != nil {
+		return nil, fmt.Errorf("failed to establish db connection %w", err)
+	}
+
+	logger := &PostgresTransationLogger{
+		ConnPool:  connPool,
+		EventChan: make(chan *api.Event, 32),
+		ErrorChan: make(chan *api.Error),
+	}
+
+	if err := logger.createTablesIfDontExist(); err != nil {
+		return nil, err
+	}
+
+	return logger, nil
 }
 
 type TransactionService struct {
@@ -48,6 +97,7 @@ type TransactionService struct {
 
 func (s *TransactionService) ReadTransactions(_ *emptypb.Empty, stream api.TransactionService_ReadTransactionsServer) error {
 	log.Logger.Info("ReadTransactions stream was opened")
+
 	for i := 0; i < 10; i++ {
 		event := &api.Event{
 			TxnType:     api.TxnType_TxnPut,
@@ -92,8 +142,15 @@ func main() {
 	flag.Parse()
 
 	grpcServer := grpc.NewServer()
+
+	txnLogger, err := NewPostgresTransactionLogger("postgresql://postgres:nastish@localhost:5432/postgres?sslmode=disable")
+	if err != nil {
+		log.Logger.Fatal("Failed to establish a connection with Postgres databse %v", err)
+		os.Exit(1)
+	}
+
 	// Register transaction service to grpc server
-	api.RegisterTransactionServiceServer(grpcServer, &TransactionService{})
+	api.RegisterTransactionServiceServer(grpcServer, &TransactionService{logger: txnLogger})
 
 	listener, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%v", *port))
 	if err != nil {
