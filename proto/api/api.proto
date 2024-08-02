@@ -1,5 +1,47 @@
 syntax = "proto3";
 
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+
 package api;
 
 option go_package = "github.com/isnastish/kvs/proto/api";
+
+service TransactionService {
+    rpc ReadTransactions(google.protobuf.Empty) returns (stream Event);
+}
+
+// Storage types
+enum StorageType {
+    StorageInt = 0;
+    StorageFloat = 1;
+    StorageStr = 2;
+    StorageUint = 3;
+    StorageMap = 4;
+}
+
+// Transaction type
+enum TxnType {
+    TxnPut = 0;
+    TxnGet = 1;
+    TxnDel = 2;
+}
+
+message Event {
+    google.protobuf.Timestamp timestamp = 1;
+    StorageType storageType = 2;
+    TxnType txnType = 3;
+    string key = 4;
+
+    oneof value {
+        int32 intValue = 5;
+        float floatValue = 6;
+        uint32 uintValue = 7;
+        string strValue = 8;
+        Map mapValue = 9;
+    }
+} 
+
+message Map {
+    map<string, string> data = 1;
+}
