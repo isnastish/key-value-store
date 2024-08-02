@@ -25,6 +25,8 @@ enum TxnType {
     TxnPut = 0;
     TxnGet = 1;
     TxnDel = 2;
+    TxnIncr = 3;
+    TxnIncrBy = 4;
 }
 
 message Event {

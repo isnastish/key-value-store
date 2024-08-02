@@ -13,6 +13,8 @@ import (
 
 	"github.com/gorilla/mux"
 
+	"google.golang.org/protobuf/types/known/emptypb"
+
 	"github.com/isnastish/kvs/pkg/log"
 	"github.com/isnastish/kvs/pkg/serviceinfo"
 	"github.com/isnastish/kvs/proto/api"
@@ -580,6 +582,7 @@ func (s *Service) writeTransaction(txnType TxnType, storage StorageType, key str
 	}
 }
 
+// TODO: Return a pair (*Service, error)
 func NewService(settings *ServiceSettings, txnClient api.TransactionServiceClient) *Service {
 	// https://stackoverflow.com/questions/39320025/how-to-stop-http-listenandserve
 	service := &Service{
@@ -600,9 +603,47 @@ func NewService(settings *ServiceSettings, txnClient api.TransactionServiceClien
 	service.storage[storageMap] = newMapStorage()
 	service.storage[storageUint] = newUintStorage()
 
+	///////////////////////////////////Read all transactions///////////////////////////////////
+	eventStream, err := service.txnClient.ReadTransactions(context.Background(), &emptypb.Empty{})
+	if err != nil {
+		log.Logger.Fatal("Failed to create event stream for reading transactions %v", err)
+	}
+
+	for {
+		event, err := eventStream.Recv()
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			log.Logger.Fatal("Failed to read an event %v", err)
+			return nil
+		}
+		switch event.TxnType {
+		case api.TxnType_TxnPut:
+			// TODO: Removed StorageType enum and use the generated one.
+			// There is another problem, how do we determine which value type we want from event struct?
+			// So using oneof in the proto definition might not be the best solution.
+			// service.storage[StorageType(event.StorageType)].Put(event.Key, newCmdResult(event.GetIntValue()))
+			log.Logger.Info("Received put event, key: %s", event.Key)
+
+		case api.TxnType_TxnGet:
+			log.Logger.Info("Received get event, key: %s", event.Key)
+
+		case api.TxnType_TxnDel:
+			log.Logger.Info("Received delete event, key: %s", event.Key)
+
+		case api.TxnType_TxnIncr:
+			log.Logger.Info("Received incr event, key: %s", event.Key)
+
+		case api.TxnType_TxnIncrBy:
+			log.Logger.Info("Received incrby event, key: %s", event.Key)
+		}
+	}
+
 	// NOTE: This has to be executed after both transaction logger AND the storage is initialized
 	if err := service.processSavedTransactions(); err != nil {
 		log.Logger.Fatal("Failed to fetch saved transactions %v", err)
+		return nil
 	}
 
 	service.BindRPCHandler("POST", "echo", echoHandler)
