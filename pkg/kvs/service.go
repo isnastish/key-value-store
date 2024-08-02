@@ -301,20 +301,25 @@ func (s *Service) floatPutHandler(w http.ResponseWriter, req *http.Request) {
 	body, err := io.ReadAll(req.Body)
 	defer req.Body.Close()
 	if err != nil {
+		err = fmt.Errorf("float storage: failed to read the request body %v", err)
+		log.Logger.Error(err.Error())
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	val, err := strconv.ParseFloat(string(body), 32)
+	res, err := strconv.ParseFloat(string(body), 32)
 	if err != nil {
+		err = fmt.Errorf("float storage: failed to parse float %v", err)
+		log.Logger.Error(err.Error())
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	cmd := s.storage[storageFloat].Put(key, newCmdResult(float32(val)))
-	if cmd.err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	s.writeTransaction(txnPut, storageFloat, key, float32(val))
+
+	val := float32(res)
+
+	cmd := s.storage[storageFloat].Put(key, newCmdResult(val))
+	_ = cmd
+
+	s.writeTransaction(txnPut, storageFloat, key, val)
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -375,7 +380,7 @@ func (s *Service) uintGetHandler(w http.ResponseWriter, req *http.Request) {
 	}
 	s.writeTransaction(txnGet, storageUint, key, nil)
 
-	w.Write([]byte(strconv.FormatUint(cmd.result.(uint64), 32)))
+	w.Write([]byte(fmt.Sprintf("%d", cmd.result.(uint32))))
 }
 
 func (s *Service) uintDelHandler(w http.ResponseWriter, req *http.Request) {
@@ -588,6 +593,7 @@ func NewService(settings *ServiceSettings) *Service {
 	service.storage[storageFloat] = newFloatStorage()
 	service.storage[storageString] = newStrStorage()
 	service.storage[storageMap] = newMapStorage()
+	service.storage[storageUint] = newUintStorage()
 
 	// NOTE: This has to be executed after both transaction logger AND the storage is initialized
 	if err := service.processSavedTransactions(); err != nil {
@@ -662,7 +668,7 @@ func (s *Service) Run() {
 
 	// NOTE: Can we remove put/add/del and only rely on HTTP method?
 	subrouter.Path("/uint/put/{key:[0-9A-Za-z_]+}").HandlerFunc(s.uintPutHandler).Methods("PUT")
-	subrouter.Path("/uint/add/{key:[0-9A-Za-z_]+}").HandlerFunc(s.uintGetHandler).Methods("GET")
+	subrouter.Path("/uint/get/{key:[0-9A-Za-z_]+}").HandlerFunc(s.uintGetHandler).Methods("GET")
 	subrouter.Path("/uint/del/{key:[0-9A-Za-z_]+}").HandlerFunc(s.uintDelHandler).Methods("DELETE")
 
 	// Endpoint to delete a key from any type of storage
