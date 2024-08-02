@@ -9,6 +9,8 @@ option go_package = "github.com/isnastish/kvs/proto/api";
 
 service TransactionService {
     rpc ReadTransactions(google.protobuf.Empty) returns (stream Event);
+    rpc WriteTransactions(stream Event) returns (google.protobuf.Empty);
+    rpc ProcessErrors(google.protobuf.Empty) returns (stream Error);
 }
 
 // Storage types
@@ -42,8 +44,14 @@ message Event {
         string strValue = 8;
         Map mapValue = 9;
     }
-} 
+}
 
 message Map {
     map<string, string> data = 1;
+}
+
+message Error {
+    google.protobuf.Timestamp timestamp = 1;
+    string message = 2;
+    optional Event cause = 3;
 }

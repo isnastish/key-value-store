@@ -37,27 +37,31 @@ func main() {
 		txnLogger, err = kvs.NewFileTxnLogger(*txnFilePath)
 		if err != nil {
 			log.Logger.Fatal("Failed to init file transaction logger %v", err)
+			return
 		}
 
 	case "db":
 		// NOTE: For development only.
 		// postgres-db is the name of a container running postgresql database on the same network
 		// as our kvs service. The container is specified in compose.yaml file
-		os.Setenv("DATABASE_URL", "postgresql://postgres:nastish@postgres-db:5432/postgres?sslmode=disable")
-		// os.Setenv("DATABASE_URL", "postgresql://postgres:nastish@localhost:5432/postgres?sslmode=disable")
+		// os.Setenv("DATABASE_URL", "postgresql://postgres:nastish@postgres-db:5432/postgres?sslmode=disable")
+		os.Setenv("DATABASE_URL", "postgresql://postgres:nastish@localhost:5432/postgres?sslmode=disable")
 
 		postgresURL := os.Getenv("DATABASE_URL")
 		if postgresURL == "" {
 			log.Logger.Fatal("Database transaction logging is enabled, but a database URL is not specified")
+			return
 		}
 
 		txnLogger, err = kvs.NewDBTxnLogger(postgresURL)
 		if err != nil {
 			log.Logger.Fatal("Failed to init DB transaction logger %v", err)
+			return
 		}
 
 	default:
 		log.Logger.Fatal("Unknown transaction logger type %s", *txnLoggerType)
+		return
 	}
 
 	settings.TxnLogger = txnLogger
@@ -67,19 +71,29 @@ func main() {
 	grpcClient, err := grpc.NewClient("localhost:5051", grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		log.Logger.Fatal("Failed to create a grpc client %v", err)
+		return
 	}
 	defer grpcClient.Close()
 
 	service := kvs.NewService(&settings, api.NewTransactionServiceClient(grpcClient))
 
+	doneChan := make(chan bool, 1)
+
+	osSigChan := make(chan os.Signal, 1)
+	signal.Notify(osSigChan, syscall.SIGINT, syscall.SIGTERM)
+
 	go func() {
-		service.Run()
+		defer close(doneChan)
+		err := service.Run()
+		if err != nil {
+			log.Logger.Error("Service terminated with an error %v", err)
+			close(osSigChan)
+		} else {
+			log.Logger.Info("Service shut down gracefully")
+		}
 	}()
 
-	osSignalChan := make(chan os.Signal, 1)
-	signal.Notify(osSignalChan, syscall.SIGINT, syscall.SIGTERM)
-	<-osSignalChan
-	service.Close()
-
-	log.Logger.Info("Service shut down gracefully")
+	<-osSigChan
+	service.Close() // does nothing if the service is NOT running
+	<-doneChan
 }

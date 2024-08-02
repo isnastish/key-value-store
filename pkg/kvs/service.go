@@ -603,43 +603,6 @@ func NewService(settings *ServiceSettings, txnClient api.TransactionServiceClien
 	service.storage[storageMap] = newMapStorage()
 	service.storage[storageUint] = newUintStorage()
 
-	///////////////////////////////////Read all transactions///////////////////////////////////
-	eventStream, err := service.txnClient.ReadTransactions(context.Background(), &emptypb.Empty{})
-	if err != nil {
-		log.Logger.Fatal("Failed to create event stream for reading transactions %v", err)
-	}
-
-	for {
-		event, err := eventStream.Recv()
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			log.Logger.Fatal("Failed to read an event %v", err)
-			return nil
-		}
-		switch event.TxnType {
-		case api.TxnType_TxnPut:
-			// TODO: Removed StorageType enum and use the generated one.
-			// There is another problem, how do we determine which value type we want from event struct?
-			// So using oneof in the proto definition might not be the best solution.
-			// service.storage[StorageType(event.StorageType)].Put(event.Key, newCmdResult(event.GetIntValue()))
-			log.Logger.Info("Received put event, key: %s", event.Key)
-
-		case api.TxnType_TxnGet:
-			log.Logger.Info("Received get event, key: %s", event.Key)
-
-		case api.TxnType_TxnDel:
-			log.Logger.Info("Received delete event, key: %s", event.Key)
-
-		case api.TxnType_TxnIncr:
-			log.Logger.Info("Received incr event, key: %s", event.Key)
-
-		case api.TxnType_TxnIncrBy:
-			log.Logger.Info("Received incrby event, key: %s", event.Key)
-		}
-	}
-
 	// NOTE: This has to be executed after both transaction logger AND the storage is initialized
 	if err := service.processSavedTransactions(); err != nil {
 		log.Logger.Fatal("Failed to fetch saved transactions %v", err)
@@ -665,15 +628,69 @@ func (s *Service) Close() {
 	}
 }
 
-func (s *Service) Run() {
+func (s *Service) Run() error {
 	defer s.txnLogger.Close()
 
-	if s.running {
-		log.Logger.Error("Service is already running")
-		return
+	s.running = true
+
+	///////////////////////////////////Open an error stream///////////////////////////////////
+	errorStream, err := s.txnClient.ProcessErrors(context.Background(), &emptypb.Empty{})
+	if err != nil {
+		return fmt.Errorf("Failed to open an error stream %v", err)
 	}
 
-	s.running = true
+	txnErrorChan := make(chan error, 1)
+	go func() {
+		defer close(txnErrorChan)
+		// NOTE: If we receive an error from the transaction service, we should terminate this service
+		// immediately.
+		for {
+			event, err := errorStream.Recv()
+			s.Close()
+			if err != nil {
+				txnErrorChan <- fmt.Errorf("Failed to receive from the error stream %v", err)
+			} else {
+				txnErrorChan <- fmt.Errorf(event.Message)
+			}
+		}
+	}()
+
+	///////////////////////////////////Read all transactions///////////////////////////////////
+	eventStream, err := s.txnClient.ReadTransactions(context.Background(), &emptypb.Empty{})
+	if err != nil {
+		return fmt.Errorf("Failed to open a stream for reading events %v", err)
+	}
+
+	for {
+		event, err := eventStream.Recv()
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return fmt.Errorf("Failed to read an event %v", err)
+		}
+
+		switch event.TxnType {
+		case api.TxnType_TxnPut:
+			// TODO: Removed StorageType enum and use the generated one.
+			// There is another problem, how do we determine which value type we want from event struct?
+			// So using oneof in the proto definition might not be the best solution.
+			// service.storage[StorageType(event.StorageType)].Put(event.Key, newCmdResult(event.GetIntValue()))
+			log.Logger.Info("Received put event, key: %s", event.Key)
+
+		case api.TxnType_TxnGet:
+			log.Logger.Info("Received get event, key: %s", event.Key)
+
+		case api.TxnType_TxnDel:
+			log.Logger.Info("Received delete event, key: %s", event.Key)
+
+		case api.TxnType_TxnIncr:
+			log.Logger.Info("Received incr event, key: %s", event.Key)
+
+		case api.TxnType_TxnIncrBy:
+			log.Logger.Info("Received incrby event, key: %s", event.Key)
+		}
+	}
 
 	shutdownCtx, cancel := context.WithCancel(context.Background())
 	defer func() {
@@ -724,6 +741,14 @@ func (s *Service) Run() {
 
 	log.Logger.Info("%s:%s service is running %s", info.ServiceName(), info.ServiceVersion(), s.settings.Endpoint)
 	if err := s.Server.ListenAndServe(); err != http.ErrServerClosed {
-		log.Logger.Fatal("Server terminated abnormally %v", err)
+		return err
 	}
+
+	// return an error from the transaction service, if any
+	err = <-txnErrorChan
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
