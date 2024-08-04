@@ -3,7 +3,7 @@ services:
     container_name: "kvs-service"
     image: 'kvs:latest'
     build: 
-      context: ./
+      dockerfile: ./Dockerfile.kvs
     ports:
       # Port 8080 is accessible for servier-to-service communication, 
       # and the same port is available for accessing the container from outside the network.
