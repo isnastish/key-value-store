@@ -83,13 +83,14 @@ func main() {
 		defer close(doneChan)
 		err := kvsService.Run()
 		if err != nil {
-
+			log.Logger.Error("Service terminated with an error %v", err)
+			close(osSigChan)
+		} else {
+			log.Logger.Info("Service shut down gracefully")
 		}
 	}()
 
 	<-osSigChan
 	kvsService.Close()
 	<-doneChan
-
-	// log.Logger.Info("Service shut down gracefully")
 }

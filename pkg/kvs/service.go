@@ -619,13 +619,8 @@ func (s *Service) Close() {
 	}
 }
 
-func (s *Service) Run() {
+func (s *Service) Run() error {
 	defer s.txnLogger.Close()
-
-	if s.running {
-		log.Logger.Error("Service is already running")
-		return
-	}
 
 	s.running = true
 
@@ -680,4 +675,6 @@ func (s *Service) Run() {
 	if err := s.Server.ListenAndServe(); err != http.ErrServerClosed {
 		log.Logger.Fatal("Server terminated abnormally %v", err)
 	}
+
+	return nil
 }
