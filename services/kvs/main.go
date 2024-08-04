@@ -10,6 +10,7 @@ import (
 
 	"github.com/isnastish/kvs/pkg/kvs"
 	"github.com/isnastish/kvs/pkg/log"
+	"github.com/isnastish/kvs/proto/api"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -23,9 +24,7 @@ func main() {
 	txnFilePath := flag.String("txn_file_name", "transactions.bin", "Path to transaction log file if file transaction logging selected")
 	txnLoggerType := flag.String("txn_type", "db", "Transaction logger type. Either log transaction to a database or a file (db|file)")
 	logLevel := flag.String("log_level", "debug", "Set global logging level. Feasible values are: (debug|info|warn|error|fatal|panic|disabled)")
-
-	// transaction service port
-	txnPort := flag.Uint("port", 5051, "Transaction service listening port")
+	txnPort := flag.Uint("txn-port", 5051, "Transaction service listening port")
 
 	flag.Parse()
 
@@ -39,6 +38,7 @@ func main() {
 		txnLogger, err = kvs.NewFileTxnLogger(*txnFilePath)
 		if err != nil {
 			log.Logger.Fatal("Failed to init file transaction logger %v", err)
+			os.Exit(1)
 		}
 
 	case "db":
@@ -50,21 +50,25 @@ func main() {
 		postgresURL := os.Getenv("DATABASE_URL")
 		if postgresURL == "" {
 			log.Logger.Fatal("Database transaction logging is enabled, but a database URL is not specified")
+			os.Exit(1)
 		}
 
 		txnLogger, err = kvs.NewDBTxnLogger(postgresURL)
 		if err != nil {
 			log.Logger.Fatal("Failed to init DB transaction logger %v", err)
+			os.Exit(1)
 		}
 
 	default:
 		log.Logger.Fatal("Unknown transaction logger type %s", *txnLoggerType)
+		os.Exit(1)
 	}
 
 	settings.TxnLogger = txnLogger
 
 	//////////////////////////////////////gRPC client//////////////////////////////////////
-	txnServiceAddr := fmt.Sprintf("localhost:%d", *txnPort)
+	// NOTE: This should be an address instead of a container name
+	txnServiceAddr := fmt.Sprintf("transaction-service:%d", *txnPort)
 	grpcClient, err := grpc.NewClient(txnServiceAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		log.Logger.Fatal("Failed to create grpc client %v", err)
@@ -72,7 +76,9 @@ func main() {
 	}
 	defer grpcClient.Close()
 
-	kvsService := kvs.NewService(&settings)
+	txnClient := api.NewTransactionServiceClient(grpcClient)
+
+	kvsService := kvs.NewService(&settings, txnClient)
 
 	doneChan := make(chan bool, 1)
 	osSigChan := make(chan os.Signal, 1)
