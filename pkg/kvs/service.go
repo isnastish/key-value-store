@@ -15,6 +15,7 @@ import (
 
 	"github.com/isnastish/kvs/pkg/log"
 	"github.com/isnastish/kvs/pkg/serviceinfo"
+	"github.com/isnastish/kvs/proto/api"
 )
 
 // TODO: Implement a throttle pattern on the server side.
@@ -49,6 +50,8 @@ type Service struct {
 	storage     map[StorageType]Storage
 	txnLogger   TxnLogger
 	running     bool
+
+	txnClient api.TransactionServiceClient
 }
 
 func (s *Service) stringPutHandler(w http.ResponseWriter, req *http.Request) {
@@ -577,7 +580,7 @@ func (s *Service) writeTransaction(txnType TxnType, storage StorageType, key str
 	}
 }
 
-func NewService(settings *ServiceSettings) *Service {
+func NewService(settings *ServiceSettings, txnClient api.TransactionServiceClient) *Service {
 	// https://stackoverflow.com/questions/39320025/how-to-stop-http-listenandserve
 	service := &Service{
 		Server: &http.Server{
@@ -587,6 +590,9 @@ func NewService(settings *ServiceSettings) *Service {
 		rpcHandlers: make([]*RPCHandler, 0),
 		storage:     make(map[StorageType]Storage),
 		txnLogger:   settings.TxnLogger,
+
+		////////////////////////////////set transaction service client////////////////////////////////
+		txnClient: txnClient,
 	}
 
 	service.storage[storageInt] = newIntStorage()

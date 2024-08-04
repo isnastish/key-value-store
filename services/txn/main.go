@@ -28,14 +28,17 @@ type TransactionService struct {
 }
 
 func (s *TransactionService) ReadTransactions(_ *emptypb.Empty, stream APIReadTransactionStream) error {
+	log.Logger.Info("Opened stream for reading transaction")
 	return nil
 }
 
 func (s *TransactionService) WriteTransactions(stream APIWriteTransactionStream) error {
+	log.Logger.Info("Opened stream for writing transactions")
 	return nil
 }
 
 func (s *TransactionService) ProcessErrors(_ *emptypb.Empty, stream APIProcessErrorStream) error {
+	log.Logger.Info("Opened stream for processing errors")
 	return nil
 }
 
