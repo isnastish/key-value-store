@@ -9,7 +9,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -a -v -o /go/bin/services/kvs \
     github.com/isnastish/kvs/services/kvs
 
 # production environment
-FROM golang:1.22-alpine AS run-env
+FROM golang:1.22-alpine3.20 AS run-env
 
 COPY --from=build-env /go/bin/services/kvs /kvs/
 

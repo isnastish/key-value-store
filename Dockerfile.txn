@@ -1,0 +1,15 @@
+FROM golang:1.22 AS build-env
+
+WORKDIR /go/src/github.com/isnastish/kvs/services/kvs
+
+ADD . /go/src/github.com/isnastish/kvs/services/kvs
+
+RUN CGO_ENABLED=0 GOOS=linux go build -a -v -o /go/bin/services/txn github.com/isnastish/kvs/services/txn
+
+FROM golang:1.22-alpine3.20 AS run-env
+
+COPY --from=build-env /go/bin/services/txn /txn/
+
+EXPOSE 5051/tcp
+
+ENTRYPOINT [ "/txn/txn" ]

@@ -11,8 +11,21 @@ services:
       # only occasionally I can reach the endpoint from outside, using other clients (python for example).
       - "127.0.0.1:8080:8080"
     depends_on:
+      - transaction-service
+    networks:
+      - backend
+
+  transaction-service:
+    container_name: "transaction-service"
+    image: "txn:latest"
+    build: 
+      dockerfile: ./Dockerfile.txn
+    ports:
+      - "5051:5051"
+    depends_on:
       postgres-db:
         condition: service_healthy
+
     networks:
       - backend
 
