@@ -15,29 +15,23 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
-//api type aliases/////////////////////////////////////
-
-type APIWriteTransactionStream api.TransactionService_WriteTransactionsServer
-type APIReadTransactionStream api.TransactionService_ReadTransactionsServer
-type APIProcessErrorStream api.TransactionService_ProcessErrorsServer
-
 /////////////////////////////////////transaction service implementation/////////////////////////////////////
 
 type TransactionService struct {
 	api.UnimplementedTransactionServiceServer
 }
 
-func (s *TransactionService) ReadTransactions(_ *emptypb.Empty, stream APIReadTransactionStream) error {
+func (s *TransactionService) ReadTransactions(_ *emptypb.Empty, stream api.TransactionService_ReadTransactionsServer) error {
 	log.Logger.Info("Opened stream for reading transaction")
 	return nil
 }
 
-func (s *TransactionService) WriteTransactions(stream APIWriteTransactionStream) error {
+func (s *TransactionService) WriteTransactions(stream api.TransactionService_WriteTransactionsServer) error {
 	log.Logger.Info("Opened stream for writing transactions")
 	return nil
 }
 
-func (s *TransactionService) ProcessErrors(_ *emptypb.Empty, stream APIProcessErrorStream) error {
+func (s *TransactionService) ProcessErrors(_ *emptypb.Empty, stream api.TransactionService_ProcessErrorsServer) error {
 	log.Logger.Info("Opened stream for processing errors")
 	return nil
 }
@@ -49,6 +43,7 @@ type GRPCServer struct {
 }
 
 func NewGRPCServer() *GRPCServer {
+	// TODO: Use service description for registering GRPC services
 	return &GRPCServer{
 		server: grpc.NewServer(),
 	}
@@ -82,6 +77,7 @@ func main() {
 	flag.Parse()
 
 	grpcServer := NewGRPCServer()
+	api.RegisterTransactionServiceServer(grpcServer.server, &TransactionService{})
 
 	doneChan := make(chan bool, 1)
 

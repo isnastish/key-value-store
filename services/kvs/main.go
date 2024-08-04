@@ -67,7 +67,8 @@ func main() {
 	settings.TxnLogger = txnLogger
 
 	//////////////////////////////////////gRPC client//////////////////////////////////////
-	txnServiceAddr := fmt.Sprintf("0.0.0.0:%d", *txnPort)
+	// NOTE: This should be an address instead of a container name
+	txnServiceAddr := fmt.Sprintf("transaction-service:%d", *txnPort)
 	grpcClient, err := grpc.NewClient(txnServiceAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		log.Logger.Fatal("Failed to create grpc client %v", err)

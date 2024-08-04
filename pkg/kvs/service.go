@@ -12,6 +12,7 @@ import (
 	"unicode"
 
 	"github.com/gorilla/mux"
+	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/isnastish/kvs/pkg/log"
 	"github.com/isnastish/kvs/pkg/serviceinfo"
@@ -627,6 +628,25 @@ func (s *Service) Close() {
 
 func (s *Service) Run() error {
 	defer s.txnLogger.Close()
+
+	//////////////////////////////////open a stream for reading transactions//////////////////////////////////
+	readTransactionStream, err := s.txnClient.ReadTransactions(context.Background(), &emptypb.Empty{})
+	if err != nil {
+		log.Logger.Error("Failed to open read transaction stream %v", err)
+		return fmt.Errorf("failed to open a stream for reading transactions %v", err)
+	}
+
+	for {
+		transaction, err := readTransactionStream.Recv()
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			log.Logger.Error("Failed to read transaction %v", err)
+			return fmt.Errorf("failed to read transaction %v", err)
+		}
+		_ = transaction
+	}
 
 	s.running = true
 
