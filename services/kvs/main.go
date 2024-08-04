@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"os"
 	"os/signal"
 	"strings"
@@ -9,6 +10,8 @@ import (
 
 	"github.com/isnastish/kvs/pkg/kvs"
 	"github.com/isnastish/kvs/pkg/log"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 func main() {
@@ -20,6 +23,9 @@ func main() {
 	txnFilePath := flag.String("txn_file_name", "transactions.bin", "Path to transaction log file if file transaction logging selected")
 	txnLoggerType := flag.String("txn_type", "db", "Transaction logger type. Either log transaction to a database or a file (db|file)")
 	logLevel := flag.String("log_level", "debug", "Set global logging level. Feasible values are: (debug|info|warn|error|fatal|panic|disabled)")
+
+	// transaction service port
+	txnPort := flag.Uint("port", 5051, "Transaction service listening port")
 
 	flag.Parse()
 
@@ -57,16 +63,33 @@ func main() {
 
 	settings.TxnLogger = txnLogger
 
-	service := kvs.NewService(&settings)
+	//////////////////////////////////////gRPC client//////////////////////////////////////
+	txnServiceAddr := fmt.Sprintf("localhost:%d", *txnPort)
+	grpcClient, err := grpc.NewClient(txnServiceAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		log.Logger.Fatal("Failed to create grpc client %v", err)
+		os.Exit(1)
+	}
+	defer grpcClient.Close()
+
+	kvsService := kvs.NewService(&settings)
+
+	doneChan := make(chan bool, 1)
+	osSigChan := make(chan os.Signal, 1)
+
+	signal.Notify(osSigChan, syscall.SIGINT, syscall.SIGTERM)
 
 	go func() {
-		service.Run()
+		defer close(doneChan)
+		err := kvsService.Run()
+		if err != nil {
+
+		}
 	}()
 
-	osSignalChan := make(chan os.Signal, 1)
-	signal.Notify(osSignalChan, syscall.SIGINT, syscall.SIGTERM)
-	<-osSignalChan
-	service.Close()
+	<-osSigChan
+	kvsService.Close()
+	<-doneChan
 
-	log.Logger.Info("Service shut down gracefully")
+	// log.Logger.Info("Service shut down gracefully")
 }
