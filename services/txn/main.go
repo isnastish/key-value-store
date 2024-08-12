@@ -98,6 +98,35 @@ func main() {
 	cert, err := tls.LoadX509KeyPair(*serverPublicKeyFile, *serverPrivateKeyFile)
 	if err != nil {
 		log.Logger.Fatal("Failed to parse public/private key pair %v", err)
+<<<<<<< HEAD
+=======
+		os.Exit(1)
+	}
+
+	// create a certificate pool from CA
+	certPool := x509.NewCertPool()
+	ca, err := os.ReadFile(*caPublicKeyFile)
+	if err != nil {
+		log.Logger.Fatal("Failed to rea ca certificate %v", err)
+		os.Exit(1)
+	}
+
+	// append the client certificates from the CA to the certificate pool
+	if ok := certPool.AppendCertsFromPEM(ca); !ok {
+		log.Logger.Fatal("Failed to append ca certificate %v", err)
+		os.Exit(1)
+	}
+
+	options := []grpc.ServerOption{
+		grpc.StreamInterceptor(readTransactionsStremInterceptor),
+
+		// grpc.StreamInterceptor(),
+		grpc.Creds(
+			credentials.NewTLS(&tls.Config{
+				// request client certificate during handshake and do the validation
+				ClientAuth:   tls.RequireAndVerifyClientCert,
+				Certificates: []tls.Certificate{cert},
+>>>>>>> 628a8324738b6282a98e027ff9a252a9bf8f2356
 				// root certificate authorities that servers use
 				// to verify a client certificate by the policy in ClientAuth
 				ClientCAs: certPool,
