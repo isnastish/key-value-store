@@ -79,7 +79,7 @@ func NewPostgresTransactionLogger() (*PostgresTransactionLogger, error) {
 func (l *PostgresTransactionLogger) createTables() error {
 	conn, err := l.connPool.Acquire(context.Background())
 	if err != nil {
-		return fmt.Errorf("failed to acquire database connection %v", err)
+		return fmt.Errorf("txn(postgres): failed to acquire database connection %v", err)
 	}
 	defer conn.Release()
 
@@ -91,7 +91,7 @@ func (l *PostgresTransactionLogger) createTables() error {
 			"key" TEXT NOT NULL UNIQUE, 
 			PRIMARY KEY("id"));`); err != nil {
 
-			return fmt.Errorf("failed to create int keys table %v", err)
+			return fmt.Errorf("txn(postgres): failed to create int keys table %v", err)
 		}
 
 		if _, err := conn.Exec(context.Background(),
@@ -104,7 +104,7 @@ func (l *PostgresTransactionLogger) createTables() error {
 			PRIMARY KEY("id"),
 			FOREIGN KEY("key_id") REFERENCES "int_keys"("id") ON DELETE CASCADE);`); err != nil {
 
-			return fmt.Errorf("failed to create integer transactions table %v", err)
+			return fmt.Errorf("txn(postgres): failed to create integer transactions table %v", err)
 		}
 	}
 
@@ -116,7 +116,7 @@ func (l *PostgresTransactionLogger) createTables() error {
 			"key" TEXT NOT NULL UNIQUE,
 			PRIMARY KEY("id"));`); err != nil {
 
-			return fmt.Errorf("failed to create uint keys table %v", err)
+			return fmt.Errorf("txn(postgres): failed to create uint keys table %v", err)
 		}
 
 		if _, err := conn.Exec(context.Background(),
@@ -129,7 +129,7 @@ func (l *PostgresTransactionLogger) createTables() error {
 			PRIMARY KEY("id"),
 			FOREIGN KEY("key_id") REFERENCES "uint_keys"("id") ON DELETE CASCADE);`); err != nil {
 
-			return fmt.Errorf("failed to create uint transactions table %v", err)
+			return fmt.Errorf("txn(postgres): failed to create uint transactions table %v", err)
 		}
 	}
 
@@ -141,7 +141,7 @@ func (l *PostgresTransactionLogger) createTables() error {
 			"key" TEXT NOT NULL UNIQUE,
 			PRIMARY KEY("id"));`); err != nil {
 
-			return fmt.Errorf("failed to create float keys table %v", err)
+			return fmt.Errorf("txn(postgres): failed to create float keys table %v", err)
 		}
 
 		if _, err := conn.Exec(context.Background(),
@@ -154,7 +154,7 @@ func (l *PostgresTransactionLogger) createTables() error {
 			PRIMARY KEY("id"),
 			FOREIGN KEY("key_id") REFERENCES "float_keys"("id") ON DELETE CASCADE);`); err != nil {
 
-			return fmt.Errorf("failed to create float transactions table %v", err)
+			return fmt.Errorf("txn(postgres): failed to create float transactions table %v", err)
 		}
 	}
 
@@ -166,7 +166,7 @@ func (l *PostgresTransactionLogger) createTables() error {
 			"key" TEXT NOT NULL UNIQUE,
 			PRIMARY KEY("id"));`); err != nil {
 
-			return fmt.Errorf("failed to create string keys table %v", err)
+			return fmt.Errorf("txn(postgres): failed to create string keys table %v", err)
 		}
 
 		if _, err := conn.Exec(context.Background(),
@@ -179,7 +179,7 @@ func (l *PostgresTransactionLogger) createTables() error {
 			PRIMARY KEY("id"),
 			FOREIGN KEY("key_id") REFERENCES "string_keys"("id") ON DELETE CASCADE);`); err != nil {
 
-			return fmt.Errorf("failed to create string transactions table %v", err)
+			return fmt.Errorf("txn(postgres): failed to create string transactions table %v", err)
 		}
 	}
 
@@ -191,7 +191,7 @@ func (l *PostgresTransactionLogger) createTables() error {
 			"key" TEXT NOT NULL UNIQUE,
 			PRIMARY KEY("id"));`); err != nil {
 
-			return fmt.Errorf("failed to create map keys table %v", err)
+			return fmt.Errorf("txn(postgres): failed to create map keys table %v", err)
 		}
 
 		if _, err := conn.Exec(context.Background(),
@@ -199,11 +199,11 @@ func (l *PostgresTransactionLogger) createTables() error {
 			"id" SERIAL,
 			"transaction_type" CHARACTER VARYING(32) NOT NULL, 
 			"key_id" SERIAL,
-			"timestampt" TIMESTAMP NOT NULL DEFAULT NOW(),
+			"timestamp" TIMESTAMP NOT NULL DEFAULT NOW(),
 			PRIMARY KEY("id"),
 			FOREIGN KEY("key_id") REFERENCES "map_keys"("id") ON DELETE CASCADE);`); err != nil {
 
-			return fmt.Errorf("failed to create map transactions table %v", err)
+			return fmt.Errorf("txn(postgres): failed to create map transactions table %v", err)
 		}
 
 		if _, err := conn.Exec(context.Background(),
@@ -215,7 +215,7 @@ func (l *PostgresTransactionLogger) createTables() error {
 			FOREIGN KEY("map_key_id") REFERENCES "map_keys"("id"),
 			FOREIGN KEY("transaction_id") REFERENCES "map_transactions"("id"));`); err != nil {
 
-			return fmt.Errorf("failed to create map key-value pairs table %v", err)
+			return fmt.Errorf("txn(postgres): failed to create map key-value pairs table %v", err)
 		}
 	}
 
@@ -239,18 +239,18 @@ func (l *PostgresTransactionLogger) readTransactions(dbConn *pgxpool.Conn, dbQue
 					transact.Data = (uint32)(transact.Data.(int32))
 				}
 				// log type name
-				log.Logger.Info("txn: read transaction %v, data type %s", transact.String(),
+				log.Logger.Info("txn(postgres): read transaction %v, data type %s", transact.String(),
 					reflect.TypeOf(transact.Data).Name(),
 				)
 			} else {
-				log.Logger.Info("txn: read transaction %v", transact.String())
+				log.Logger.Info("txn(postgres): read transaction %v", transact.String())
 			}
 		}
 		return transact, err
 	})
 
 	if err != nil {
-		log.Logger.Info("txn: failed to read transactions")
+		log.Logger.Info("txn(postgres): failed to read transactions")
 		return err
 	}
 
@@ -271,7 +271,7 @@ func (l *PostgresTransactionLogger) ReadTransactions() (<-chan *apitypes.Transac
 		defer close(transactChan)
 		defer close(errorChan)
 
-		log.Logger.Info("txn: Start reading transactions")
+		log.Logger.Info("txn(postgres): start reading transactions")
 
 		dbConn, err := l.connPool.Acquire(context.Background())
 		if err != nil {
@@ -290,8 +290,8 @@ func (l *PostgresTransactionLogger) ReadTransactions() (<-chan *apitypes.Transac
 
 			err := l.readTransactions(dbConn, query, transactChan, apitypes.StorageInt)
 			if err != nil {
-				log.Logger.Error("Failed to read int transactions %v", err)
-				errorChan <- fmt.Errorf("Failed to read int transactions %v", err)
+				log.Logger.Error("txn(postgres): failed to read int transactions %v", err)
+				errorChan <- fmt.Errorf("txn(postgres): failed to read int transactions %v", err)
 				return
 			}
 		}
@@ -306,8 +306,8 @@ func (l *PostgresTransactionLogger) ReadTransactions() (<-chan *apitypes.Transac
 
 			err := l.readTransactions(dbConn, query, transactChan, apitypes.StorageUint)
 			if err != nil {
-				log.Logger.Error("Failed to read uint transactions %v", err)
-				errorChan <- fmt.Errorf("Failed to read uint transactions %v", err)
+				log.Logger.Error("txn(postgres): failed to read uint transactions %v", err)
+				errorChan <- fmt.Errorf("tn(postgres): failed to read uint transactions %v", err)
 				return
 			}
 		}
@@ -322,8 +322,8 @@ func (l *PostgresTransactionLogger) ReadTransactions() (<-chan *apitypes.Transac
 
 			err := l.readTransactions(dbConn, query, transactChan, apitypes.StorageFloat)
 			if err != nil {
-				log.Logger.Error("Failed to read float transactions %v", err)
-				errorChan <- fmt.Errorf("Failed to read float transactions %v", err)
+				log.Logger.Error("txn(postgres): failed to read float transactions %v", err)
+				errorChan <- fmt.Errorf("txn(postgres): failed to read float transactions %v", err)
 				return
 			}
 		}
@@ -338,8 +338,8 @@ func (l *PostgresTransactionLogger) ReadTransactions() (<-chan *apitypes.Transac
 
 			err := l.readTransactions(dbConn, query, transactChan, apitypes.StorageString)
 			if err != nil {
-				log.Logger.Error("Failed to read string transactions %v", err)
-				errorChan <- fmt.Errorf("Failed to read string transactions %v", err)
+				log.Logger.Error("txn(postgres): failed to read string transactions %v", err)
+				errorChan <- fmt.Errorf("txn(postgres): failed to read string transactions %v", err)
 				return
 			}
 		}
@@ -356,7 +356,7 @@ func (l *PostgresTransactionLogger) ReadTransactions() (<-chan *apitypes.Transac
 
 			rows, _ := dbConn.Query(context.Background(),
 				`SELECT "map_transactions"."id" AS "transact_id", "transaction_type", 
-				"map_keys"."id" AS "map_key_id", "key", "timestamp"
+				"map_keys"."id" AS "map_key_id", "key", "timestamp" FROM "map_transactions"
 				JOIN "map_keys" ON "key_id" = "map_keys"."id";`)
 
 			mdArray, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (*MapTransactMD, error) {
@@ -385,8 +385,29 @@ func (l *PostgresTransactionLogger) ReadTransactions() (<-chan *apitypes.Transac
 							`SELECT "key", "value" FROM "map_key_value_pairs"
 							WHERE "transaction_id" = ($1) AND "map_key_id" = ($2);`, md.TransactId, md.MapKeyId)
 						qq.Query(func(rows pgx.Rows) error {
-							// pgx.CollectRows(rows, func(row pgx.CollectableRow) () {})
-							return nil
+							data := make(map[string]string)
+							// NOTE: Once the storage supports maps of any kind, we could use pgx.RowToMap instead
+							_, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (map[string]string, error) {
+								var (
+									key   string
+									value string
+								)
+								err := row.Scan(&key, &value)
+								if err == nil {
+									data[key] = value
+								}
+								return nil, err
+							})
+							if err == nil {
+								transactions = append(transactions, &apitypes.Transaction{
+									StorageType: apitypes.StorageMap,
+									TxnType:     md.TransactType,
+									Timestamp:   md.Timestamp,
+									Key:         md.MapKey,
+									Data:        data,
+								})
+							}
+							return err
 						})
 					} else {
 						batch.Queue(`SELECT "id" FROM "map_key_value_pairs";`).QueryRow(func(row pgx.Row) error {
@@ -452,12 +473,12 @@ func (l *PostgresTransactionLogger) HandleTransactions() <-chan error {
 	errorChan := make(chan error)
 
 	go func() {
-		log.Logger.Info("txn: Start processing incoming transactions")
-		defer log.Logger.Info("txn: Finished processing incoming transactions")
+		log.Logger.Info("txn(postgres): start processing incoming transactions")
+		defer log.Logger.Info("txn(postgres): finished processing incoming transactions")
 
 		dbConn, err := l.connPool.Acquire(context.Background())
 		if err != nil {
-			errorChan <- fmt.Errorf("failed to acquire database connection from pool %v", err)
+			errorChan <- fmt.Errorf("txn(postgres): failed to acquire database connection from pool %v", err)
 			return
 		}
 		defer dbConn.Release()
@@ -469,7 +490,7 @@ func (l *PostgresTransactionLogger) HandleTransactions() <-chan error {
 				case apitypes.StorageInt:
 					keyId, err := l.insertTransactionKey(dbConn, transact, "int_keys")
 					if err != nil {
-						log.Logger.Error("Failed to retrieve transaction key id %v", err)
+						log.Logger.Error("txn(postgres): failed to retrieve transaction key id %v", err)
 						errorChan <- err
 						return
 					}
@@ -484,8 +505,8 @@ func (l *PostgresTransactionLogger) HandleTransactions() <-chan error {
 					)
 
 					if err != nil {
-						log.Logger.Error("Failed to write a int transaction %v", err)
-						errorChan <- fmt.Errorf("failed to write int transaction %v", err)
+						log.Logger.Error("txn(postgres): failed to write a int transaction %v", err)
+						errorChan <- fmt.Errorf("txn(postgres): failed to write int transaction %v", err)
 						return
 					}
 
@@ -494,7 +515,7 @@ func (l *PostgresTransactionLogger) HandleTransactions() <-chan error {
 				case apitypes.StorageUint:
 					keyId, err := l.insertTransactionKey(dbConn, transact, "uint_keys")
 					if err != nil {
-						log.Logger.Error("Failed to retrieve transaction key id %v", err)
+						log.Logger.Error("txn(postgres): failed to retrieve transaction key id %v", err)
 						errorChan <- err
 						return
 					}
@@ -509,8 +530,8 @@ func (l *PostgresTransactionLogger) HandleTransactions() <-chan error {
 					)
 
 					if err != nil {
-						log.Logger.Error("Failed to write a uint transaction %v", err)
-						errorChan <- fmt.Errorf("failed to write uint transaction %v", err)
+						log.Logger.Error("txn(postgres): failed to write a uint transaction %v", err)
+						errorChan <- fmt.Errorf("txn(postgres): failed to write uint transaction %v", err)
 						return
 					}
 
@@ -519,7 +540,7 @@ func (l *PostgresTransactionLogger) HandleTransactions() <-chan error {
 				case apitypes.StorageFloat:
 					keyId, err := l.insertTransactionKey(dbConn, transact, "float_keys")
 					if err != nil {
-						log.Logger.Error("Failed to retrieve transaction key id %v", err)
+						log.Logger.Error("txn(postgres): failed to retrieve transaction key id %v", err)
 						errorChan <- err
 						return
 					}
@@ -534,8 +555,8 @@ func (l *PostgresTransactionLogger) HandleTransactions() <-chan error {
 					)
 
 					if err != nil {
-						log.Logger.Error("Failed to write a float transaction %v", err)
-						errorChan <- fmt.Errorf("failed to write float transaction %v", err)
+						log.Logger.Error("txn(postgres): failed to write a float transaction %v", err)
+						errorChan <- fmt.Errorf("txn(postgres): failed to write float transaction %v", err)
 						return
 					}
 
@@ -544,7 +565,7 @@ func (l *PostgresTransactionLogger) HandleTransactions() <-chan error {
 				case apitypes.StorageString:
 					keyId, err := l.insertTransactionKey(dbConn, transact, "string_keys")
 					if err != nil {
-						log.Logger.Error("Failed to retrieve transaction key id %v", err)
+						log.Logger.Error("txn(postgres): failed to retrieve transaction key id %v", err)
 						errorChan <- err
 						return
 					}
@@ -559,17 +580,17 @@ func (l *PostgresTransactionLogger) HandleTransactions() <-chan error {
 					)
 
 					if err != nil {
-						log.Logger.Error("Failed to write a string transaction %v", err)
-						errorChan <- fmt.Errorf("failed to write string transaction %v", err)
+						log.Logger.Error("txn(postgres): failed to write a string transaction %v", err)
+						errorChan <- fmt.Errorf("txn(postgres): failed to write string transaction %v", err)
 						return
 					}
 
-					log.Logger.Info("txn: wrote transaction %v", transact.String())
+					log.Logger.Info("txn(postgres): wrote transaction %v", transact.String())
 
 				case apitypes.StorageMap:
 					keyId, err := l.insertTransactionKey(dbConn, transact, "map_keys")
 					if err != nil {
-						log.Logger.Error("Failed to retrieve transaction key id %v", err)
+						log.Logger.Error("txn(postgres): failed to retrieve transaction key id %v", err)
 						errorChan <- err
 						return
 					}
@@ -583,8 +604,8 @@ func (l *PostgresTransactionLogger) HandleTransactions() <-chan error {
 					)
 					transactId, err := pgx.CollectOneRow(rows, pgx.RowTo[int32])
 					if err != nil {
-						log.Logger.Error("Failed to query transaction id %v", err)
-						errorChan <- fmt.Errorf("failed to query transaction id %v", err)
+						log.Logger.Error("txn(postgres): failed to query transaction id %v", err)
+						errorChan <- fmt.Errorf("txn(postgres): failed to query transaction id %v", err)
 						return
 					}
 
@@ -594,18 +615,18 @@ func (l *PostgresTransactionLogger) HandleTransactions() <-chan error {
 							batch.Queue(
 								`INSERT INTO "map_key_value_pairs" ("transaction_id", "map_key_id", "key", "value") 
 								VALUES ($1, $2, $3, $4);`,
-								transactId, *keyId, transact.Key, key, value)
+								transactId, *keyId, key, value)
 						}
 
 						err = dbConn.SendBatch(context.Background(), batch).Close()
 						if err != nil {
-							log.Logger.Error("Failed to insert map key value pairs %v", err)
-							errorChan <- fmt.Errorf("failed to insert into map key value pairs table %v", err)
+							log.Logger.Error("txn(postgres): failed to insert map key value pairs %v", err)
+							errorChan <- fmt.Errorf("txn(postgres): failed to insert into map key value pairs table %v", err)
 							return
 						}
 					}
 
-					log.Logger.Info("txn : wrote transaction %v", transact.String())
+					log.Logger.Info("txn(postgres): wrote transaction %v", transact.String())
 				}
 			}
 		}

@@ -777,11 +777,17 @@ func (s *Service) Run() error {
 
 					case apitypes.StorageString:
 						transactionData = &api.TransactionData{
+							Kind: &api.TransactionData_StrValue{StrValue: transact.Data.(string)},
+						}
+
+					case apitypes.StorageMap:
+						transactionData = &api.TransactionData{
 							Kind: &api.TransactionData_MapValue{
 								MapValue: &api.Map{Data: transact.Data.(map[string]string)},
 							},
 						}
 					}
+
 				} else {
 					transactionData = &api.TransactionData{Kind: &api.TransactionData_NullValue{}}
 				}

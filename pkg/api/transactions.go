@@ -146,6 +146,7 @@ func (s *transactionServer) WriteTransactions(stream api.TransactionService_Writ
 					apiData = protoTransaction.Data.GetStrValue()
 
 				case api.StorageType_StorageMap:
+					log.Logger.Info("txn: map data %v", protoTransaction.Data.GetMapValue().Data)
 					apiData = protoTransaction.Data.GetMapValue().Data
 				}
 				// TODO: Consider NullValue as well.
