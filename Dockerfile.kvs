@@ -14,6 +14,12 @@ FROM golang:1.22-alpine3.20 AS run-env
 
 COPY --from=build-env /go/bin/services/kvs /kvs/
 
+ADD ./certs/* /certs/
+
 EXPOSE 8080/tcp
 
-ENTRYPOINT [ "/kvs/kvs" ]
+CMD [ "/kvs/kvs", \
+    "-private_key_file", "../certs/client.key", \
+    "-public_key_file", "../certs/client.crt", \
+    "-ca_public_key_file", "../certs/ca.crt" \
+]

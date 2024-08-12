@@ -9,6 +9,5 @@ If you see these logs, as a result of executing the command above, you have done
 ## Testing the api
 Once your service is running, the simplest way of testing the storage would be to clone a KVS Python client repository and execute any cli command, `python -m kvs.cli echo "Hello From the Client"`, for instance. More information can be found here [using python client to test kvs service](https://github.com/isnastish/kvs-python-client), or you can run any test inside the Go client package with `go test`.
 
-
-
-> **NOTE:** [feature/transaction-service](https://github.com/isnastish/kvs/tree/feature/transaction-service) branch contains the integration for TXN service using `gRPC` framework and is currently in development.
+## Security
+Key-value storage service uses [mTLS](https://en.wikipedia.org/wiki/Mutual_authentication) (mutual TLS) protocol to authenticate with a transaction service.

@@ -8,7 +8,10 @@
             "mode": "debug",
             "program": "${workspaceFolder}/services/kvs/main.go", 
             "args": [
-            ] 
+                "-private_key_file", "../../certs/client.key",
+                "-public_key_file", "../../certs/client.crt",
+                "-ca_public_key_file", "../../certs/ca.crt",
+            ]
         }, 
     ]
 }
