@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -263,11 +264,11 @@ func (l *PostgresTransactionLogger) readTransactions(dbConn *pgxpool.Conn, dbQue
 }
 
 func (l *PostgresTransactionLogger) ReadTransactions() (<-chan *apitypes.Transaction, <-chan error) {
-	transactionChan := make(chan *apitypes.Transaction)
+	transactChan := make(chan *apitypes.Transaction)
 	errorChan := make(chan error) // only 1 error?
 
 	go func() {
-		defer close(transactionChan)
+		defer close(transactChan)
 		defer close(errorChan)
 
 		log.Logger.Info("txn: Start reading transactions")
@@ -287,7 +288,7 @@ func (l *PostgresTransactionLogger) ReadTransactions() (<-chan *apitypes.Transac
 					SELECT "id" FROM "int_keys"
 				);`
 
-			err := l.readTransactions(dbConn, query, transactionChan, apitypes.StorageInt)
+			err := l.readTransactions(dbConn, query, transactChan, apitypes.StorageInt)
 			if err != nil {
 				log.Logger.Error("Failed to read int transactions %v", err)
 				errorChan <- fmt.Errorf("Failed to read int transactions %v", err)
@@ -303,7 +304,7 @@ func (l *PostgresTransactionLogger) ReadTransactions() (<-chan *apitypes.Transac
 					SELECT "id" FROM "uint_keys"
 				);`
 
-			err := l.readTransactions(dbConn, query, transactionChan, apitypes.StorageUint)
+			err := l.readTransactions(dbConn, query, transactChan, apitypes.StorageUint)
 			if err != nil {
 				log.Logger.Error("Failed to read uint transactions %v", err)
 				errorChan <- fmt.Errorf("Failed to read uint transactions %v", err)
@@ -319,7 +320,7 @@ func (l *PostgresTransactionLogger) ReadTransactions() (<-chan *apitypes.Transac
 					SELECT "id" FROM "float_keys"
 				);`
 
-			err := l.readTransactions(dbConn, query, transactionChan, apitypes.StorageFloat)
+			err := l.readTransactions(dbConn, query, transactChan, apitypes.StorageFloat)
 			if err != nil {
 				log.Logger.Error("Failed to read float transactions %v", err)
 				errorChan <- fmt.Errorf("Failed to read float transactions %v", err)
@@ -335,7 +336,7 @@ func (l *PostgresTransactionLogger) ReadTransactions() (<-chan *apitypes.Transac
 					SELECT "id" FROM "string_keys"
 				);`
 
-			err := l.readTransactions(dbConn, query, transactionChan, apitypes.StorageString)
+			err := l.readTransactions(dbConn, query, transactChan, apitypes.StorageString)
 			if err != nil {
 				log.Logger.Error("Failed to read string transactions %v", err)
 				errorChan <- fmt.Errorf("Failed to read string transactions %v", err)
@@ -345,16 +346,80 @@ func (l *PostgresTransactionLogger) ReadTransactions() (<-chan *apitypes.Transac
 
 		// Query Map transactions
 		{
-			//  TODO: Read map transactions
+			type MapTransactMD struct {
+				TransactId   int32
+				TransactType apitypes.TransactionType
+				MapKeyId     int32
+				MapKey       string
+				Timestamp    time.Time
+			}
+
+			rows, _ := dbConn.Query(context.Background(),
+				`SELECT "map_transactions"."id" AS "transact_id", "transaction_type", 
+				"map_keys"."id" AS "map_key_id", "key", "timestamp"
+				JOIN "map_keys" ON "key_id" = "map_keys"."id";`)
+
+			mdArray, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (*MapTransactMD, error) {
+				var (
+					md           = MapTransactMD{}
+					transactType string
+				)
+				err := row.Scan(&md.TransactId, &transactType, &md.MapKeyId, &md.MapKey, &md.Timestamp)
+				if err == nil {
+					md.TransactType = apitypes.TransactionType(apitypes.TransactionTypeValue[transactType])
+				}
+				return &md, err
+			})
+			if err != nil {
+				log.Logger.Error("txn(postgres): failed to read map transaction metadata %v", err)
+				errorChan <- fmt.Errorf("txn(postgres): failed to read map transaction metadata %v", err)
+				return
+			}
+
+			if len(mdArray) > 0 {
+				transactions := make([]*apitypes.Transaction, 0)
+				batch := &pgx.Batch{}
+				for _, md := range mdArray {
+					if md.TransactType == apitypes.TransactionPut { // or IncrBy or Incr
+						qq := batch.Queue(
+							`SELECT "key", "value" FROM "map_key_value_pairs"
+							WHERE "transaction_id" = ($1) AND "map_key_id" = ($2);`, md.TransactId, md.MapKeyId)
+						qq.Query(func(rows pgx.Rows) error {
+							// pgx.CollectRows(rows, func(row pgx.CollectableRow) () {})
+							return nil
+						})
+					} else {
+						batch.Queue(`SELECT "id" FROM "map_key_value_pairs";`).QueryRow(func(row pgx.Row) error {
+							transactions = append(transactions, &apitypes.Transaction{
+								StorageType: apitypes.StorageMap,
+								TxnType:     md.TransactType,
+								Timestamp:   md.Timestamp,
+								Key:         md.MapKey,
+							})
+							return nil
+						})
+					}
+				}
+				err := dbConn.SendBatch(context.Background(), batch)
+				if err != nil {
+					log.Logger.Info("txn(postgres): failed to read ")
+					errorChan <- fmt.Errorf("txn(postgres): failed to read map transactions %v", err)
+					return
+				}
+
+				for _, transact := range transactions {
+					transactChan <- transact
+				}
+			}
 		}
 
 		// Make a signal that we're done with reading transactions.
 		errorChan <- io.EOF
 
-		log.Logger.Info("txn: End reading transactions")
+		log.Logger.Info("txn(postgres): finished reading transactions")
 	}()
 
-	return transactionChan, errorChan
+	return transactChan, errorChan
 }
 
 func (l *PostgresTransactionLogger) WriteTransaction(transact *apitypes.Transaction) {
