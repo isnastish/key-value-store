@@ -13,27 +13,21 @@ import (
 
 	"github.com/gorilla/mux"
 	"google.golang.org/protobuf/types/known/emptypb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/isnastish/kvs/pkg/apitypes"
 	"github.com/isnastish/kvs/pkg/log"
 	"github.com/isnastish/kvs/pkg/serviceinfo"
 	"github.com/isnastish/kvs/proto/api"
 )
 
-// TODO: Implement a throttle pattern on the server side.
-// We should limit the amount of requests a client can make to a service
-// to 10 requests per second.
-
-// NOTE: Instead of passing nil when making GET/DELETE transactions, introduce separate functions
-// writeGetTransaction(), writeDeleteTransaction() and only pass the information, (key and a storageType)
-
 type ServiceSettings struct {
-	Endpoint    string
-	CertPemFile string
-	KeyPemFile  string
-	Username    string
-	Password    string
-	TxnDisabled bool
-	TxnLogger
+	Endpoint             string
+	CertPemFile          string
+	KeyPemFile           string
+	Username             string
+	Password             string
+	TransactionsDisabled bool
 }
 
 type HandlerCallback func(w http.ResponseWriter, req *http.Request)
@@ -46,13 +40,12 @@ type RPCHandler struct {
 
 type Service struct {
 	*http.Server
-	settings    *ServiceSettings
-	rpcHandlers []*RPCHandler
-	storage     map[StorageType]Storage
-	txnLogger   TxnLogger
-	running     bool
-
-	txnClient api.TransactionServiceClient
+	settings     *ServiceSettings
+	rpcHandlers  []*RPCHandler
+	storage      map[apitypes.TransactionStorageType]Storage
+	running      bool
+	txnClient    api.TransactionServiceClient
+	transactChan chan *apitypes.Transaction
 }
 
 func (s *Service) stringPutHandler(w http.ResponseWriter, req *http.Request) {
@@ -65,13 +58,19 @@ func (s *Service) stringPutHandler(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	cmd := s.storage[storageString].Put(key, newCmdResult(string(val)))
+	cmd := s.storage[apitypes.StorageString].Put(key, newCmdResult(string(val)))
 	if cmd.err != nil {
 		http.Error(w, cmd.err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	s.writeTransaction(txnPut, storageString, key, string(val))
+	s.sendTransaction(&apitypes.Transaction{
+		Timestamp:   time.Now(),
+		TxnType:     apitypes.TransactionPut,
+		StorageType: apitypes.StorageString,
+		Key:         key,
+		Data:        string(val),
+	})
 
 	w.WriteHeader(http.StatusOK)
 }
@@ -80,13 +79,18 @@ func (s *Service) stringGetHandler(w http.ResponseWriter, req *http.Request) {
 	logOnEndpointHit(req.RequestURI, req.Method, req.RemoteAddr)
 
 	key := mux.Vars(req)["key"]
-	cmd := s.storage[storageString].Get(key, newCmdResult())
+	cmd := s.storage[apitypes.StorageString].Get(key, newCmdResult())
 	if cmd.err != nil {
 		http.Error(w, cmd.err.Error(), http.StatusNotFound)
 		return
 	}
 
-	s.writeTransaction(txnGet, storageString, key, nil)
+	s.sendTransaction(&apitypes.Transaction{
+		Timestamp:   time.Now(),
+		TxnType:     apitypes.TransactionGet,
+		StorageType: apitypes.StorageString,
+		Key:         key,
+	})
 
 	bytes := []byte(cmd.result.(string))
 	w.Header().Add("Content-Type", "text/plain")
@@ -100,10 +104,15 @@ func (s *Service) stringDeleteHandler(w http.ResponseWriter, req *http.Request) 
 	logOnEndpointHit(req.RequestURI, req.Method, req.RemoteAddr)
 
 	key := mux.Vars(req)["key"]
-	cmd := s.storage[storageString].Del(key, newCmdResult())
+	cmd := s.storage[apitypes.StorageString].Del(key, newCmdResult())
 	if cmd.result.(bool) {
+		s.sendTransaction(&apitypes.Transaction{
+			Timestamp:   time.Now(),
+			TxnType:     apitypes.TransactionDel,
+			StorageType: apitypes.StorageString,
+			Key:         key,
+		})
 		w.Header().Add("Deleted", "true")
-		s.writeTransaction(txnDel, storageString, key, nil)
 	}
 
 	w.WriteHeader(http.StatusOK)
@@ -126,12 +135,19 @@ func (s *Service) mapPutHandler(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	cmd := s.storage[storageMap].Put(key, newCmdResult(hashMap))
+	cmd := s.storage[apitypes.StorageMap].Put(key, newCmdResult(hashMap))
 	if cmd.err != nil {
 		http.Error(w, cmd.err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.writeTransaction(txnPut, storageMap, key, hashMap)
+
+	s.sendTransaction(&apitypes.Transaction{
+		TxnType:     apitypes.TransactionPut,
+		StorageType: apitypes.StorageMap,
+		Key:         key,
+		Data:        hashMap,
+	})
+
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -139,12 +155,18 @@ func (s *Service) mapGetHandler(w http.ResponseWriter, req *http.Request) {
 	logOnEndpointHit(req.RequestURI, req.Method, req.RemoteAddr)
 
 	key := mux.Vars(req)["key"]
-	cmd := s.storage[storageMap].Get(key, newCmdResult())
+	cmd := s.storage[apitypes.StorageMap].Get(key, newCmdResult())
 	if cmd.err != nil {
 		http.Error(w, cmd.err.Error(), http.StatusNotFound)
 		return
 	}
-	s.writeTransaction(txnGet, storageMap, key, nil)
+
+	s.sendTransaction(&apitypes.Transaction{
+		Timestamp:   time.Now(),
+		TxnType:     apitypes.TransactionGet,
+		StorageType: apitypes.StorageMap,
+		Key:         key,
+	})
 
 	// NOTE: Maybe instead of transferring a stream of bytes, we could send the data
 	// for the map in a json format? The content-type would have to be changed to application/json
@@ -165,10 +187,15 @@ func (s *Service) mapDeleteHandler(w http.ResponseWriter, req *http.Request) {
 	logOnEndpointHit(req.RequestURI, req.Method, req.RemoteAddr)
 
 	key := mux.Vars(req)["key"]
-	cmd := s.storage[storageMap].Del(key, newCmdResult())
+	cmd := s.storage[apitypes.StorageMap].Del(key, newCmdResult())
 	if cmd.result.(bool) {
+		s.sendTransaction(&apitypes.Transaction{
+			Timestamp:   time.Now(),
+			TxnType:     apitypes.TransactionDel,
+			StorageType: apitypes.StorageMap,
+			Key:         key,
+		})
 		w.Header().Add("Deleted", "true")
-		s.writeTransaction(txnDel, storageMap, key, nil)
 	}
 
 	w.WriteHeader(http.StatusOK)
@@ -186,17 +213,27 @@ func (s *Service) intPutHandler(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	val, err := strconv.ParseInt(string(body), 10, 32)
+	res, err := strconv.ParseInt(string(body), 10, 32)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	cmd := s.storage[storageInt].Put(key, newCmdResult(int32(val)))
+
+	val := int32(res)
+	cmd := s.storage[apitypes.StorageInt].Put(key, newCmdResult(val))
 	if cmd.err != nil {
 		http.Error(w, cmd.err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.writeTransaction(txnPut, storageInt, key, int32(val))
+
+	s.sendTransaction(&apitypes.Transaction{
+		Timestamp:   time.Now(),
+		TxnType:     apitypes.TransactionPut,
+		StorageType: apitypes.StorageInt,
+		Key:         key,
+		Data:        val,
+	})
+
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -204,12 +241,18 @@ func (s *Service) intGetHandler(w http.ResponseWriter, req *http.Request) {
 	logOnEndpointHit(req.RequestURI, req.Method, req.RemoteAddr)
 
 	key := mux.Vars(req)["key"]
-	cmd := s.storage[storageInt].Get(key, newCmdResult())
+	cmd := s.storage[apitypes.StorageInt].Get(key, newCmdResult())
 	if cmd.err != nil {
 		http.Error(w, cmd.err.Error(), http.StatusNotFound)
 		return
 	}
-	s.writeTransaction(txnGet, storageInt, key, nil)
+
+	s.sendTransaction(&apitypes.Transaction{
+		Timestamp:   time.Now(),
+		TxnType:     apitypes.TransactionGet,
+		StorageType: apitypes.StorageInt,
+		Key:         key,
+	})
 
 	w.Header().Add("Conent-Type", "text/plain")
 	w.WriteHeader(http.StatusOK)
@@ -220,12 +263,16 @@ func (s *Service) intDeleteHandler(w http.ResponseWriter, req *http.Request) {
 	logOnEndpointHit(req.RequestURI, req.Method, req.RemoteAddr)
 
 	key := mux.Vars(req)["key"]
-	cmd := s.storage[storageInt].Del(key, newCmdResult())
+	cmd := s.storage[apitypes.StorageInt].Del(key, newCmdResult())
 	if cmd.result.(bool) {
+		s.sendTransaction(&apitypes.Transaction{
+			Timestamp:   time.Now(),
+			TxnType:     apitypes.TransactionDel,
+			StorageType: apitypes.StorageInt,
+			Key:         key,
+		})
 		w.Header().Add("Deleted", "true")
-		s.writeTransaction(txnDel, storageInt, key, nil)
 	}
-
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -233,13 +280,19 @@ func (s *Service) intIncrHandler(w http.ResponseWriter, req *http.Request) {
 	logOnEndpointHit(req.RequestURI, req.Method, req.RemoteAddr)
 
 	key := mux.Vars(req)["key"]
-	intStorage := s.storage[storageInt].(*IntStorage)
+
+	intStorage := s.storage[apitypes.StorageInt].(*IntStorage)
 	cmd := intStorage.Incr(key, newCmdResult())
 	if cmd.err != nil {
 		http.Error(w, cmd.err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.writeTransaction(txnIncr, storageInt, key, nil)
+	s.sendTransaction(&apitypes.Transaction{
+		Timestamp:   time.Now(),
+		TxnType:     apitypes.TransactionIncr,
+		StorageType: apitypes.StorageInt,
+		Key:         key,
+	})
 
 	// response body should contain the preivous value
 	contents := strconv.FormatInt(int64(cmd.result.(int32)), 10)
@@ -259,18 +312,27 @@ func (s *Service) intIncrByHandler(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	val, err := strconv.ParseInt(string(bytes), 10, 32)
+	res, err := strconv.ParseInt(string(bytes), 10, 32)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	intStorage := s.storage[storageInt].(*IntStorage)
-	cmd := intStorage.IncrBy(key, newCmdResult(int32(val)))
+
+	val := int32(res)
+	intStorage := s.storage[apitypes.StorageInt].(*IntStorage)
+	cmd := intStorage.IncrBy(key, newCmdResult(val))
 	if cmd.err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.writeTransaction(txnIncrBy, storageInt, key, int32(val))
+
+	s.sendTransaction(&apitypes.Transaction{
+		Timestamp:   time.Now(),
+		TxnType:     apitypes.TransactionIncrBy,
+		StorageType: apitypes.StorageInt,
+		Key:         key,
+		Data:        val,
+	})
 
 	// response should contain the previously inserted value
 	contents := strconv.FormatInt(int64(cmd.result.(int32)), 10)
@@ -284,12 +346,19 @@ func (s *Service) floatGetHandler(w http.ResponseWriter, req *http.Request) {
 	logOnEndpointHit(req.RequestURI, req.Method, req.RemoteAddr)
 
 	key := mux.Vars(req)["key"]
-	cmd := s.storage[storageFloat].Get(key, newCmdResult())
+	cmd := s.storage[apitypes.StorageFloat].Get(key, newCmdResult())
 	if cmd.err != nil {
 		http.Error(w, cmd.err.Error(), http.StatusNotFound)
 		return
 	}
-	s.writeTransaction(txnGet, storageFloat, key, nil)
+
+	s.sendTransaction(&apitypes.Transaction{
+		Timestamp:   time.Now(),
+		TxnType:     apitypes.TransactionGet,
+		StorageType: apitypes.StorageFloat,
+		Key:         key,
+	})
+
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(fmt.Sprintf("%e", cmd.result)))
 }
@@ -319,11 +388,16 @@ func (s *Service) floatPutHandler(w http.ResponseWriter, req *http.Request) {
 	}
 
 	val := float32(res)
+	s.storage[apitypes.StorageFloat].Put(key, newCmdResult(val))
 
-	cmd := s.storage[storageFloat].Put(key, newCmdResult(val))
-	_ = cmd
+	s.sendTransaction(&apitypes.Transaction{
+		Timestamp:   time.Now(),
+		TxnType:     apitypes.TransactionPut,
+		StorageType: apitypes.StorageFloat,
+		Key:         key,
+		Data:        val,
+	})
 
-	s.writeTransaction(txnPut, storageFloat, key, val)
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -331,12 +405,17 @@ func (s *Service) floatDeleteHandler(w http.ResponseWriter, req *http.Request) {
 	logOnEndpointHit(req.RequestURI, req.Method, req.RemoteAddr)
 
 	key := mux.Vars(req)["key"]
-	cmd := s.storage[storageFloat].Del(key, newCmdResult())
-	if cmd.result.(bool) {
-		w.Header().Add("Deleted", "true")
-		s.writeTransaction(txnDel, storageFloat, key, nil)
-	}
 
+	cmd := s.storage[apitypes.StorageFloat].Del(key, newCmdResult())
+	if cmd.result.(bool) {
+		s.sendTransaction(&apitypes.Transaction{
+			Timestamp:   time.Now(),
+			TxnType:     apitypes.TransactionDel,
+			StorageType: apitypes.StorageFloat,
+			Key:         key,
+		})
+		w.Header().Add("Deleted", "true")
+	}
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -363,11 +442,15 @@ func (s *Service) uintPutHandler(w http.ResponseWriter, req *http.Request) {
 	}
 
 	value := uint32(res)
-	cmd := s.storage[storageUint].Put(key, newCmdResult(value))
-	_ = cmd
+	s.storage[apitypes.StorageUint].Put(key, newCmdResult(value))
 
-	s.writeTransaction(txnPut, storageUint, key, value)
-	log.Logger.Info("Uint32 PUT endpoint is not implemented yet")
+	s.sendTransaction(&apitypes.Transaction{
+		Timestamp:   time.Now(),
+		TxnType:     apitypes.TransactionPut,
+		StorageType: apitypes.StorageUint,
+		Key:         key,
+		Data:        value,
+	})
 }
 
 func (s *Service) uintGetHandler(w http.ResponseWriter, req *http.Request) {
@@ -375,14 +458,19 @@ func (s *Service) uintGetHandler(w http.ResponseWriter, req *http.Request) {
 
 	key := mux.Vars(req)["key"]
 
-	cmd := s.storage[storageUint].Get(key, newCmdResult())
+	cmd := s.storage[apitypes.StorageUint].Get(key, newCmdResult())
 	if cmd.err != nil {
 		err := fmt.Errorf("uint storage: %v", cmd.err)
 		log.Logger.Error(err.Error())
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
-	s.writeTransaction(txnGet, storageUint, key, nil)
+	s.sendTransaction(&apitypes.Transaction{
+		Timestamp:   time.Now(),
+		TxnType:     apitypes.TransactionGet,
+		StorageType: apitypes.StorageUint,
+		Key:         key,
+	})
 
 	w.Write([]byte(fmt.Sprintf("%d", cmd.result.(uint32))))
 }
@@ -392,12 +480,16 @@ func (s *Service) uintDelHandler(w http.ResponseWriter, req *http.Request) {
 
 	key := mux.Vars(req)["key"]
 
-	cmd := s.storage[storageUint].Del(key, newCmdResult())
+	cmd := s.storage[apitypes.StorageUint].Del(key, newCmdResult())
 	if cmd.result.(bool) {
+		s.sendTransaction(&apitypes.Transaction{
+			Timestamp:   time.Now(),
+			TxnType:     apitypes.TransactionDel,
+			StorageType: apitypes.StorageUint,
+			Key:         key,
+		})
 		w.Header().Add("Deleter", "true")
-		s.writeTransaction(txnDel, storageUint, key, nil)
 	}
-
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -405,11 +497,18 @@ func (s *Service) delKeyHandler(w http.ResponseWriter, req *http.Request) {
 	logOnEndpointHit(req.RequestURI, req.Method, req.RemoteAddr)
 
 	key := mux.Vars(req)["key"]
+
 	for _, storage := range s.storage {
 		cmd := storage.Del(key, newCmdResult())
 		if cmd.result.(bool) {
-			w.Header().Add("Deleter", "true")
-			s.writeTransaction(txnDel, cmd.storageType, key, nil)
+			s.sendTransaction(&apitypes.Transaction{
+				Timestamp:   time.Now(),
+				TxnType:     apitypes.TransactionDel,
+				StorageType: cmd.storageType,
+				Key:         key,
+			})
+
+			w.Header().Add("Deleted", "true")
 			break
 		}
 	}
@@ -522,63 +621,13 @@ func (s *Service) BindRPCHandler(method, funcName string, callback HandlerCallba
 	)
 }
 
-func (s *Service) processSavedTransactions() error {
-	var err error
-	var event Event
-
-	eventsChan, errorsChan := s.txnLogger.ReadEvents()
-
-	for {
-		select {
-		case event = <-eventsChan:
-			switch event.txnType {
-			case txnPut:
-				cmd := s.storage[event.storageType].Put(event.key, newCmdResult(event.value))
-				err = cmd.err
-
-			case txnGet:
-				cmd := s.storage[event.storageType].Get(event.key, newCmdResult())
-				err = cmd.err
-
-			case txnDel:
-				cmd := s.storage[event.storageType].Del(event.key, newCmdResult())
-				err = cmd.err
-
-			case txnIncr:
-				intStorage := s.storage[event.storageType].(*IntStorage)
-				cmd := intStorage.IncrBy(event.key, newCmdResult())
-				err = cmd.err
-
-			case txnIncrBy:
-				intStorage := s.storage[event.storageType].(*IntStorage)
-				cmd := intStorage.Incr(event.key, newCmdResult(event.value))
-				err = cmd.err
-			}
-
-		case err = <-errorsChan:
-			// Error received while reading events
-			if err != io.EOF && err != nil {
-				return err
-			}
-			return nil
-		}
-
-		// Error encountered while inserting events into the storage
-		if err != nil {
-			return err
-		}
-
-		log.Logger.Info("Saved event: Event{id: %d, t: %s, key: %s, value: %v, timestamp: %s}",
-			event.id, event.txnType, event.key, event.value, event.timestamp.Format(time.DateTime))
-
-		event = Event{}
+func (s *Service) sendTransaction(transact *apitypes.Transaction) {
+	if !s.settings.TransactionsDisabled {
+		s.transactChan <- transact
+		return
 	}
-}
 
-func (s *Service) writeTransaction(txnType TxnType, storage StorageType, key string, value interface{}) {
-	if !s.settings.TxnDisabled {
-		s.txnLogger.WriteTransaction(txnType, storage, key, value)
-	}
+	log.Logger.Warn("An attempt to send a transaction was made, but transactions are disabled")
 }
 
 func NewService(settings *ServiceSettings, txnClient api.TransactionServiceClient) *Service {
@@ -587,25 +636,18 @@ func NewService(settings *ServiceSettings, txnClient api.TransactionServiceClien
 		Server: &http.Server{
 			Addr: settings.Endpoint,
 		},
-		settings:    settings,
-		rpcHandlers: make([]*RPCHandler, 0),
-		storage:     make(map[StorageType]Storage),
-		txnLogger:   settings.TxnLogger,
-
-		////////////////////////////////set transaction service client////////////////////////////////
-		txnClient: txnClient,
+		settings:     settings,
+		rpcHandlers:  make([]*RPCHandler, 0),
+		storage:      make(map[apitypes.TransactionStorageType]Storage),
+		transactChan: make(chan *apitypes.Transaction),
+		txnClient:    txnClient,
 	}
 
-	service.storage[storageInt] = newIntStorage()
-	service.storage[storageFloat] = newFloatStorage()
-	service.storage[storageString] = newStrStorage()
-	service.storage[storageMap] = newMapStorage()
-	service.storage[storageUint] = newUintStorage()
-
-	// NOTE: This has to be executed after both transaction logger AND the storage is initialized
-	if err := service.processSavedTransactions(); err != nil {
-		log.Logger.Fatal("Failed to fetch saved transactions %v", err)
-	}
+	service.storage[apitypes.StorageInt] = newIntStorage()
+	service.storage[apitypes.StorageUint] = newUintStorage()
+	service.storage[apitypes.StorageFloat] = newFloatStorage()
+	service.storage[apitypes.StorageString] = newStrStorage()
+	service.storage[apitypes.StorageMap] = newMapStorage()
 
 	service.BindRPCHandler("POST", "echo", echoHandler)
 	service.BindRPCHandler("POST", "hello", helloHandler)
@@ -627,7 +669,8 @@ func (s *Service) Close() {
 }
 
 func (s *Service) Run() error {
-	defer s.txnLogger.Close()
+	// NOTE: We cannot run the server, until we read all the transactions from transaction serivce,
+	// so, if there were any in the database OR a file, we put them into memory storage.
 
 	//////////////////////////////////open a stream for reading transactions//////////////////////////////////
 	readTransactionStream, err := s.txnClient.ReadTransactions(context.Background(), &emptypb.Empty{})
@@ -636,8 +679,10 @@ func (s *Service) Run() error {
 		return fmt.Errorf("failed to open a stream for reading transactions %v", err)
 	}
 
+	// NOTE: This all will be moved to an api client, so we don't interact with GRPC types from the service.
+
 	for {
-		transaction, err := readTransactionStream.Recv()
+		transact, err := readTransactionStream.Recv()
 		if err != nil {
 			if err == io.EOF {
 				break
@@ -645,22 +690,127 @@ func (s *Service) Run() error {
 			log.Logger.Error("Failed to read transaction %v", err)
 			return fmt.Errorf("failed to read transaction %v", err)
 		}
-		_ = transaction
+
+		txnType := apitypes.TransactionType(apitypes.TransactionTypeValue[transact.TxnType.String()])
+		txnStorageType := apitypes.TransactionStorageType(apitypes.StorageTypeValue[transact.StorageType.String()])
+
+		log.Logger.Info("kvs: Received transaction %s", transact.TxnType.String())
+
+		switch txnType {
+		case apitypes.TransactionPut:
+			var value interface{}
+			switch txnStorageType {
+			case apitypes.StorageInt:
+				value = transact.Data.GetIntValue()
+
+			case apitypes.StorageUint:
+				value = transact.Data.GetUintValue()
+
+			case apitypes.StorageFloat:
+				value = transact.Data.GetFloatValue()
+
+			case apitypes.StorageString:
+				value = transact.Data.GetStrValue()
+
+			case apitypes.StorageMap:
+				value = transact.Data.GetMapValue().GetData()
+			}
+
+			log.Logger.Info("Value %v", value)
+
+			if cmd := s.storage[txnStorageType].Put(transact.Key, newCmdResult(value)); cmd.err != nil {
+				log.Logger.Error("Failed to store %s transaction %v",
+					apitypes.TransactionTypeName[int32(apitypes.TransactionDel)], cmd.err)
+				return cmd.err
+			}
+
+		case apitypes.TransactionGet:
+			if cmd := s.storage[txnStorageType].Get(transact.Key, newCmdResult()); cmd.err != nil {
+				log.Logger.Error("Failed to store %s transaction %v",
+					apitypes.TransactionTypeName[int32(apitypes.TransactionDel)], cmd.err)
+				return cmd.err
+			}
+
+		case apitypes.TransactionDel:
+			if cmd := s.storage[txnStorageType].Del(transact.Key, newCmdResult()); cmd.err != nil {
+				log.Logger.Error("Failed to store %s transaction %v",
+					apitypes.TransactionTypeName[int32(apitypes.TransactionDel)], cmd.err)
+				return cmd.err
+			}
+
+		case apitypes.TransactionIncr:
+
+		case apitypes.TransactionIncrBy:
+			// NOTE: We would have to retrieve a value here as well.
+		}
 	}
 
-	s.running = true
+	/////////////////////////////////////Open a stream for writing transactions/////////////////////////////////////
+	writeTransactionStream, err := s.txnClient.WriteTransactions(context.Background())
+	if err != nil {
+		log.Logger.Error("Failed to open write transactions stream %v", err)
+		return fmt.Errorf("failed to open a stream for writing transactions %v", err)
+	}
 
-	shutdownCtx, cancel := context.WithCancel(context.Background())
-	defer func() {
-		cancel()
-		s.txnLogger.WaitForPendingTransactions()
+	// TODO: This goroutine has to be terminated gracefully.
+	go func() {
+		for {
+			select {
+			case transact := <-s.transactChan:
+				var transactionData *api.TransactionData
+				if transact.Data != nil {
+					switch transact.StorageType {
+					case apitypes.StorageInt:
+						transactionData = &api.TransactionData{
+							Kind: &api.TransactionData_IntValue{IntValue: transact.Data.(int32)},
+						}
+
+					case apitypes.StorageUint:
+						transactionData = &api.TransactionData{
+							Kind: &api.TransactionData_UintValue{UintValue: transact.Data.(uint32)},
+						}
+
+					case apitypes.StorageFloat:
+						transactionData = &api.TransactionData{
+							Kind: &api.TransactionData_FloatValue{FloatValue: transact.Data.(float32)},
+						}
+
+					case apitypes.StorageString:
+						transactionData = &api.TransactionData{
+							Kind: &api.TransactionData_MapValue{
+								MapValue: &api.Map{Data: transact.Data.(map[string]string)},
+							},
+						}
+					}
+				} else {
+					transactionData = &api.TransactionData{Kind: &api.TransactionData_NullValue{}}
+				}
+
+				protoTransaction := &api.Transaction{
+					TxnType:     api.TxnType(transact.TxnType),
+					StorageType: api.StorageType(transact.StorageType),
+					Timestamp:   timestamppb.New(transact.Timestamp),
+					Key:         transact.Key,
+					Data:        transactionData,
+				}
+
+				log.Logger.Info("kvs: Sending %s transaction", apitypes.TransactionTypeName[int32(transact.TxnType)])
+
+				err := writeTransactionStream.Send(protoTransaction)
+				if err != nil {
+					// TODO: Think more how to handle it best.
+					log.Logger.Error("kvs: failed to send a transaction %v", err)
+					s.Close()
+					return
+				}
+			}
+		}
 	}()
 
-	// This goroutine won't be leaked
-	go s.txnLogger.ProcessTransactions(shutdownCtx)
+	////////////////////////////////////////service logic////////////////////////////////////////
+	s.running = true
 
 	router := mux.NewRouter().StrictSlash(true)
-	// router.Path()
 	subrouter := router.PathPrefix(fmt.Sprintf("/%s/%s/", info.ServiceName(), info.ServiceVersion())).Subrouter()
 
 	// Bind all rpc handlers

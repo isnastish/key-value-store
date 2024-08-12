@@ -1,94 +1,132 @@
 package main
 
 import (
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
 	"flag"
-	"fmt"
-	"net"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
+	myapi "github.com/isnastish/kvs/pkg/api"
 	"github.com/isnastish/kvs/pkg/log"
-	"github.com/isnastish/kvs/proto/api"
-
+	"github.com/isnastish/kvs/pkg/txn"
 	"google.golang.org/grpc"
-	"google.golang.org/protobuf/types/known/emptypb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
 
-/////////////////////////////////////transaction service implementation/////////////////////////////////////
-
-type TransactionService struct {
-	api.UnimplementedTransactionServiceServer
-}
-
-func (s *TransactionService) ReadTransactions(_ *emptypb.Empty, stream api.TransactionService_ReadTransactionsServer) error {
-	log.Logger.Info("Opened stream for reading transaction")
-	return nil
-}
-
-func (s *TransactionService) WriteTransactions(stream api.TransactionService_WriteTransactionsServer) error {
-	log.Logger.Info("Opened stream for writing transactions")
-	return nil
-}
-
-func (s *TransactionService) ProcessErrors(_ *emptypb.Empty, stream api.TransactionService_ProcessErrorsServer) error {
-	log.Logger.Info("Opened stream for processing errors")
-	return nil
-}
-
-//////////////////////////////////grpc server wrapper//////////////////////////////////
-
-type GRPCServer struct {
-	server *grpc.Server
-}
-
-func NewGRPCServer() *GRPCServer {
-	// TODO: Use service description for registering GRPC services
-	return &GRPCServer{
-		server: grpc.NewServer(),
-	}
-}
-
-func (s *GRPCServer) Serve(port uint) error {
-	listener, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port))
-	if err != nil {
-		log.Logger.Error("grpc: failed to listen %v", err)
-		return fmt.Errorf("failed to listen %v", err)
+func validateBasicCredentials(incomingCtx context.Context) error {
+	md, ok := metadata.FromIncomingContext(incomingCtx)
+	if !ok {
+		return status.Errorf(codes.InvalidArgument, "missing credentials metadata")
 	}
 
-	log.Logger.Info("Listening on port 0.0.0.0:%d", port)
+	if auth, ok := md["authorization"]; ok {
+		if len(auth) > 0 {
+			token := strings.TrimPrefix(auth[0], "Basic ")
+			if token == base64.StdEncoding.EncodeToString([]byte("saml:saml")) {
+				return nil
+			}
+		}
+	}
 
-	// Will return a non-nil error unless Stop is called
-	err = s.server.Serve(listener)
+	return status.Errorf(codes.Unauthenticated, "invalid credentials token")
+}
+
+// //////////////////////////////////////////////////////////////////
+// Server-side stream interceptor
+func readTransactionsStremInterceptor(srv interface{}, ss grpc.ServerStream,
+	info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+
+	log.Logger.Info("Invoked server streaming interceptor")
+
+	if err := validateBasicCredentials(ss.Context()); err != nil {
+		log.Logger.Error("Authorization failed %v", err)
+		return err
+	}
+
+	log.Logger.Info("Authorization succeeded")
+
+	err := handler(srv, ss)
 	if err != nil {
-		log.Logger.Error("Failed to serve %v", err)
+		log.Logger.Info("Failed to invoke streaming RPC with error %v", err)
 	}
 
 	return err
 }
 
-func (s *GRPCServer) Close() {
-	s.server.Stop()
-}
-
 func main() {
-	/////////////////////////////////////Transaction service port/////////////////////////////////////
-	txnPort := flag.Uint("port", 5051, "Transaction service listening port")
+	grpcPort := flag.Uint("grpc_port", 5051, "GRPC listening port")
+	loggerBackend := flag.String("backend", "postgres", "Backend for logging transactions [file|postgres]")
+	serverPrivateKeyFile := flag.String("private_key_file", "", "Server private RSA key")
+	serverPublicKeyFile := flag.String("public_key_file", "", "Server public X509 key")
+	caPublicKeyFile := flag.String("ca_public_key_file", "", "Public kye of a CA used to sign all public certificates")
+
 	flag.Parse()
 
-	grpcServer := NewGRPCServer()
-	api.RegisterTransactionServiceServer(grpcServer.server, &TransactionService{})
+	var transactLogger txn.TransactionLogger
+
+	switch *loggerBackend {
+	case "postgres":
+		postgresLogger, err := txn.NewPostgresTransactionLogger()
+		if err != nil {
+			log.Logger.Fatal("Failed to create database transaction logger %v", err)
+			os.Exit(1)
+		}
+		transactLogger = postgresLogger
+
+		log.Logger.Info("Successfully connected to database")
+
+	case "file":
+		// TODO: Path as a command line argument.
+		const filepath = ""
+		fileLogger, err := txn.NewFileTransactionLogger(filepath)
+		if err != nil {
+			log.Logger.Fatal("Failed to create file transaction logger %v", err)
+			os.Exit(1)
+		}
+		transactLogger = fileLogger
+	}
+
+	// parse server's public/private keys
+	cert, err := tls.LoadX509KeyPair(*serverPublicKeyFile, *serverPrivateKeyFile)
+	if err != nil {
+		log.Logger.Fatal("Failed to parse public/private key pair %v", err)
+				// root certificate authorities that servers use
+				// to verify a client certificate by the policy in ClientAuth
+				ClientCAs: certPool,
+				// Is it to harsh using the tls version 1.3?
+				MinVersion: tls.VersionTLS13,
+			}),
+		),
+	}
+
+	transactionService := txn.NewTransactionService(transactLogger)
+
+	// pass TLS credentials to create  secure grpc server
+	grpcServer := myapi.NewGRPCServer(myapi.NewTransactionServer(transactionService), options...)
 
 	doneChan := make(chan bool, 1)
+	osSigChan := make(chan os.Signal, 1)
+
+	signal.Notify(osSigChan, syscall.SIGINT, syscall.SIGTERM)
 
 	go func() {
 		defer close(doneChan)
-		// TODO: Handle errors
-		grpcServer.Serve(*txnPort)
+		err := grpcServer.Serve(*grpcPort)
+		if err != nil {
+			log.Logger.Error("Transaction service terminated %v", err)
+			close(osSigChan)
+		} else {
+			log.Logger.Info("Service closed gracefully")
+		}
 	}()
-
-	osSigChan := make(chan os.Signal, 1)
-	signal.Notify(osSigChan, syscall.SIGINT, syscall.SIGTERM)
 
 	<-osSigChan
 	grpcServer.Close()
