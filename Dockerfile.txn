@@ -21,8 +21,4 @@ CMD [ "/txn/txn", \
     "-private_key_file", "../certs/server.key", \
     "-public_key_file", "../certs/server.crt", \
     "-ca_public_key_file", "../certs/ca.crt" \
-<<<<<<< HEAD
 ]
-=======
-]
->>>>>>> 628a8324738b6282a98e027ff9a252a9bf8f2356
