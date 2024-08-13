@@ -691,13 +691,12 @@ func (s *Service) Run() error {
 			return fmt.Errorf("failed to read transaction %v", err)
 		}
 
-		txnType := apitypes.TransactionType(apitypes.TransactionTypeValue[transact.TxnType.String()])
-		txnStorageType := apitypes.TransactionStorageType(apitypes.StorageTypeValue[transact.StorageType.String()])
+		txnStorageType := apitypes.TransactionStorageType(transact.StorageType)
 
-		log.Logger.Info("kvs: Received transaction %s", transact.TxnType.String())
-
-		switch txnType {
+		switch apitypes.TransactionType(transact.TxnType) {
 		case apitypes.TransactionPut:
+			log.Logger.Info("kvs: received put transaction")
+
 			var value interface{}
 			switch txnStorageType {
 			case apitypes.StorageInt:
@@ -716,8 +715,6 @@ func (s *Service) Run() error {
 				value = transact.Data.GetMapValue().GetData()
 			}
 
-			log.Logger.Info("Value %v", value)
-
 			if cmd := s.storage[txnStorageType].Put(transact.Key, newCmdResult(value)); cmd.err != nil {
 				log.Logger.Error("Failed to store %s transaction %v",
 					apitypes.TransactionTypeName[int32(apitypes.TransactionDel)], cmd.err)
@@ -725,6 +722,8 @@ func (s *Service) Run() error {
 			}
 
 		case apitypes.TransactionGet:
+			log.Logger.Info("kvs: received get transaction")
+
 			if cmd := s.storage[txnStorageType].Get(transact.Key, newCmdResult()); cmd.err != nil {
 				log.Logger.Error("Failed to store %s transaction %v",
 					apitypes.TransactionTypeName[int32(apitypes.TransactionDel)], cmd.err)
@@ -732,6 +731,8 @@ func (s *Service) Run() error {
 			}
 
 		case apitypes.TransactionDel:
+			log.Logger.Info("kvs: recevied del transaction")
+
 			if cmd := s.storage[txnStorageType].Del(transact.Key, newCmdResult()); cmd.err != nil {
 				log.Logger.Error("Failed to store %s transaction %v",
 					apitypes.TransactionTypeName[int32(apitypes.TransactionDel)], cmd.err)
@@ -739,9 +740,10 @@ func (s *Service) Run() error {
 			}
 
 		case apitypes.TransactionIncr:
+			// TODO: Not implemented yet
 
 		case apitypes.TransactionIncrBy:
-			// NOTE: We would have to retrieve a value here as well.
+			// TODO: Not implemented yet
 		}
 	}
 
@@ -777,11 +779,17 @@ func (s *Service) Run() error {
 
 					case apitypes.StorageString:
 						transactionData = &api.TransactionData{
+							Kind: &api.TransactionData_StrValue{StrValue: transact.Data.(string)},
+						}
+
+					case apitypes.StorageMap:
+						transactionData = &api.TransactionData{
 							Kind: &api.TransactionData_MapValue{
 								MapValue: &api.Map{Data: transact.Data.(map[string]string)},
 							},
 						}
 					}
+
 				} else {
 					transactionData = &api.TransactionData{Kind: &api.TransactionData_NullValue{}}
 				}

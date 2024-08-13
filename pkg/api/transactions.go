@@ -1,12 +1,6 @@
 package api
 
-// [x] NOTE: All trannsactions are read as Put transactions for some reason from a database,
-// we would have to investigate that.
-// [ ] When reading transactions from a database and sending them over the network,
-//	   the values are not assigned properly. Thus, querying a key will result in 0 value for integer storage.
-
 import (
-	"context"
 	"io"
 
 	"google.golang.org/grpc"
@@ -51,29 +45,24 @@ func (s *transactionServer) ReadTransactions(_ *emptypb.Empty, stream api.Transa
 			if transact.TxnType == apitypes.TransactionPut {
 				switch transact.StorageType {
 				case apitypes.StorageInt:
-					transactionData = &api.TransactionData{
-						Kind: &api.TransactionData_IntValue{IntValue: transact.Data.(int32)},
-					}
+					transactionData = &api.TransactionData{Kind: &api.TransactionData_IntValue{IntValue: transact.Data.(int32)}}
 
 				case apitypes.StorageUint:
-					transactionData = &api.TransactionData{
-						Kind: &api.TransactionData_UintValue{UintValue: transact.Data.(uint32)},
-					}
+					transactionData = &api.TransactionData{Kind: &api.TransactionData_UintValue{UintValue: transact.Data.(uint32)}}
 
 				case apitypes.StorageFloat:
-					transactionData = &api.TransactionData{
-						Kind: &api.TransactionData_FloatValue{FloatValue: transact.Data.(float32)},
-					}
+					transactionData = &api.TransactionData{Kind: &api.TransactionData_FloatValue{FloatValue: transact.Data.(float32)}}
 
 				case apitypes.StorageString:
+					transactionData = &api.TransactionData{Kind: &api.TransactionData_StrValue{StrValue: transact.Data.(string)}}
+
+				case apitypes.StorageMap:
+					log.Logger.Info("txn: map data: %v", transact.Data.(map[string]string))
 					transactionData = &api.TransactionData{
-						Kind: &api.TransactionData_MapValue{
-							MapValue: &api.Map{Data: transact.Data.(map[string]string)},
-						},
+						Kind: &api.TransactionData_MapValue{MapValue: &api.Map{Data: transact.Data.(map[string]string)}},
 					}
 				}
 			} else {
-				// TODO: Should we assign nullvalue like this?
 				transactionData = &api.TransactionData{Kind: &api.TransactionData_NullValue{}}
 			}
 
@@ -170,20 +159,4 @@ func (s *transactionServer) WriteTransactions(stream api.TransactionService_Writ
 			return err
 		}
 	}
-}
-
-// /////////////////////////////////////////////////////////////////////////////////
-// NOTE: Only for testing unary interceptors
-func (s *transactionServer) TestingUnaryCall(context.Context, *emptypb.Empty) (*api.Transaction, error) {
-	log.Logger.Info("Testing unary rpc was invoked")
-
-	transact := &api.Transaction{
-		TxnType:     api.TxnType_TxnPut,
-		Timestamp:   timestamppb.Now(),
-		StorageType: api.StorageType_StorageInt,
-		Key:         "_testing_key_",
-		Data:        &api.TransactionData{Kind: &api.TransactionData_IntValue{IntValue: 120}},
-	}
-
-	return transact, nil
 }
