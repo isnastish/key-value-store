@@ -359,7 +359,7 @@ func (l *PostgresTransactionLogger) ReadTransactions() (<-chan *apitypes.Transac
 				"map_keys"."id" AS "map_key_id", "key", "timestamp" FROM "map_transactions"
 				JOIN "map_keys" ON "key_id" = "map_keys"."id";`)
 
-			mdArray, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (*MapTransactMD, error) {
+			mdArray, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (MapTransactMD, error) {
 				var (
 					md           = MapTransactMD{}
 					transactType string
@@ -368,7 +368,7 @@ func (l *PostgresTransactionLogger) ReadTransactions() (<-chan *apitypes.Transac
 				if err == nil {
 					md.TransactType = apitypes.TransactionType(apitypes.TransactionTypeValue[transactType])
 				}
-				return &md, err
+				return md, err
 			})
 			if err != nil {
 				log.Logger.Error("txn(postgres): failed to read map transaction metadata %v", err)
@@ -381,36 +381,30 @@ func (l *PostgresTransactionLogger) ReadTransactions() (<-chan *apitypes.Transac
 				batch := &pgx.Batch{}
 				for _, md := range mdArray {
 					if md.TransactType == apitypes.TransactionPut { // or IncrBy or Incr
-						qq := batch.Queue(
-							`SELECT "key", "value" FROM "map_key_value_pairs"
-							WHERE "transaction_id" = ($1) AND "map_key_id" = ($2);`, md.TransactId, md.MapKeyId)
+						qq := batch.Queue(`SELECT "key", "value" FROM "map_key_value_pairs" WHERE "transaction_id" = ($1) AND "map_key_id" = ($2);`, md.TransactId, md.MapKeyId)
 						qq.Query(func(rows pgx.Rows) error {
 							data := make(map[string]string)
-							// NOTE: Once the storage supports maps of any kind, we could use pgx.RowToMap instead
 							_, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (map[string]string, error) {
-								var (
-									key   string
-									value string
-								)
+								var key string
+								var value string
 								err := row.Scan(&key, &value)
 								if err == nil {
 									data[key] = value
 								}
 								return nil, err
 							})
-							if err == nil {
-								transactions = append(transactions, &apitypes.Transaction{
-									StorageType: apitypes.StorageMap,
-									TxnType:     md.TransactType,
-									Timestamp:   md.Timestamp,
-									Key:         md.MapKey,
-									Data:        data,
-								})
+							if err != nil {
+								return err
 							}
-							return err
+							transactions = append(transactions, &apitypes.Transaction{StorageType: apitypes.StorageMap, TxnType: md.TransactType, Timestamp: md.Timestamp, Key: md.MapKey, Data: data})
+							return nil
 						})
 					} else {
-						batch.Queue(`SELECT "id" FROM "map_key_value_pairs";`).QueryRow(func(row pgx.Row) error {
+						// NOTE: This query won't return any key-value pairs since it's not a put/incrby transaction.
+						// But, we need to make it anyway to read transactions in the right order, thus, get transactions,
+						// cannot be read before put transactions etc. The reason for that is because all batch callbacks are executed
+						// when we call Close() function on a batch result.
+						batch.Queue(`SELECT * FROM "map_key_value_pairs" WHERE "transaction_id" = ($1) AND "map_key_id" = ($2);`, md.TransactId, md.MapKeyId).QueryRow(func(row pgx.Row) error {
 							transactions = append(transactions, &apitypes.Transaction{
 								StorageType: apitypes.StorageMap,
 								TxnType:     md.TransactType,
@@ -421,13 +415,12 @@ func (l *PostgresTransactionLogger) ReadTransactions() (<-chan *apitypes.Transac
 						})
 					}
 				}
-				err := dbConn.SendBatch(context.Background(), batch)
+				err := dbConn.SendBatch(context.Background(), batch).Close()
 				if err != nil {
-					log.Logger.Info("txn(postgres): failed to read ")
+					log.Logger.Info("txn(postgres): failed to read map transactions %v", err)
 					errorChan <- fmt.Errorf("txn(postgres): failed to read map transactions %v", err)
 					return
 				}
-
 				for _, transact := range transactions {
 					transactChan <- transact
 				}
