@@ -62,6 +62,7 @@ func readTransactionsStremInterceptor(srv interface{}, ss grpc.ServerStream,
 }
 
 func main() {
+	logLevel := flag.String("log_level", "info", "Log level")
 	grpcPort := flag.Uint("grpc_port", 5051, "GRPC listening port")
 	loggerBackend := flag.String("backend", "postgres", "Backend for logging transactions [file|postgres]")
 	serverPrivateKeyFile := flag.String("private_key_file", "", "Server private RSA key")
@@ -69,6 +70,8 @@ func main() {
 	caPublicKeyFile := flag.String("ca_public_key_file", "", "Public kye of a CA used to sign all public certificates")
 
 	flag.Parse()
+
+	log.SetupGlobalLogLevel(*logLevel)
 
 	var transactLogger txn.TransactionLogger
 
