@@ -16,12 +16,13 @@ Key-value storage service uses [mTLS](https://en.wikipedia.org/wiki/Mutual_authe
 Schema for storing integer transactions. The first table serves as a junction table for storing unique keys, whereas the second table 
 is an actual storage which contains a transaction type, an id of the key, value (for the `put` transaction) and a timestamp (when a transaction was received).
 ```sql
+--table for storing unique keys 
 CREATE TABLE IF NOT EXISTS "int_keys" (
     "id" SERIAL,
-    "key" TEXT NOT NULL UNIQUE, 
-    PRIMARY KEY("id")
-);
+    "key" TEXT NOT NULL UNIQUE,
+    PRIMARY KEY("id"));
 
+--table for storing int transactions
 CREATE TABLE IF NOT EXISTS "int_transactions" (
     "id" SERIAL,
     "transaction_type" CHARACTER VARYING(32) NOT NULL,
@@ -29,8 +30,34 @@ CREATE TABLE IF NOT EXISTS "int_transactions" (
     "value" INTEGER,
     "insert_time" TIMESTAMP NOT NULL DEFAULT NOW(),
     PRIMARY KEY("id"),
-    FOREIGN KEY("key_id") REFERENCES "int_keys"("id") ON DELETE CASCADE
-);
+    FOREIGN KEY("key_id") REFERENCES "int_keys"("id") ON DELETE CASCADE);
+```
+All the other storages have the same structure, although type of the `value` differs, depending on the storage type, except map. Map storage has a different schema due to the fact that it has to store key-value paris in a separte table.
+
+```sql
+--table for storing unique keys
+CREATE TABLE IF NOT EXISTS "map_keys" (
+    "id" SERIAL,
+    "key" TEXT NOT NULL UNIQUE,
+    PRIMARY KEY("id"));
+
+--table for storing map transactions
+CREATE TABLE IF NOT EXISTS "map_transactions" (
+    "id" SERIAL,
+    "transaction_type" CHARACTER VARYING(32) NOT NULL, 
+    "key_id" SERIAL,
+    "timestamp" TIMESTAMP NOT NULL DEFAULT NOW(),
+    PRIMARY KEY("id"),
+    FOREIGN KEY("key_id") REFERENCES "map_keys"("id") ON DELETE CASCADE);
+
+--table for storing map key-value pairs (for `put` transactions)
+CREATE TABLE IF NOT EXISTS "map_key_value_pairs" (
+    "transaction_id" SERIAL NOT NULL,
+    "map_key_id" SERIAL NOT NULL,
+    "key" TEXT NOT NULL,
+    "value" TEXT NOT NULL,
+    FOREIGN KEY("map_key_id") REFERENCES "map_keys"("id"),
+    FOREIGN KEY("transaction_id") REFERENCES "map_transactions"("id"));
 ```
 
 > **NOTE** An important consideration was made. If `delete` transaction is received, all transactions prior to this one would be deleted. That way we prevent our tables from growing continuously slowing down our queries as the tables grow in size.
