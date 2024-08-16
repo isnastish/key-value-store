@@ -12,7 +12,9 @@ Once your service is running, the simplest way of testing the storage would be t
 ## Security
 Key-value storage service uses [mTLS](https://en.wikipedia.org/wiki/Mutual_authentication) (mutual TLS) protocol to authenticate with a transaction service.
 
-## Database
+## Persisting transactions in a PostgreSQL
+Schema for storing integer transactions. The first table serves as a junction table for storing unique keys, whereas the second table 
+is an actual storage which contains a transaction type, an id of the key, value (for the `put` transaction) and a timestamp (when a transaction was received).
 ```sql
 CREATE TABLE IF NOT EXISTS "int_keys" (
     "id" SERIAL,
@@ -20,13 +22,15 @@ CREATE TABLE IF NOT EXISTS "int_keys" (
     PRIMARY KEY("id")
 );
 
-CREATE TABLE IF NOT EXISTS "integer_transactions" (
+CREATE TABLE IF NOT EXISTS "int_transactions" (
     "id" SERIAL,
     "transaction_type" CHARACTER VARYING(32) NOT NULL,
     "key_id" SERIAL,
     "value" INTEGER,
-    "timestamp" TIMESTAMP NOT NULL DEFAULT NOW(),
+    "insert_time" TIMESTAMP NOT NULL DEFAULT NOW(),
     PRIMARY KEY("id"),
     FOREIGN KEY("key_id") REFERENCES "int_keys"("id") ON DELETE CASCADE
 );
 ```
+
+> **NOTE** An important consideration was made. If `delete` transaction is received, all transactions prior to this one would be deleted. That way we prevent our tables from growing continuously slowing down our queries as the tables grow in size.

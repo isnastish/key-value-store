@@ -15,6 +15,7 @@ import (
 
 // NOTE: If we encountered Delete transaction, we have to remove all the transactions in a database prior to this one.
 // Since the value no longer exists in the storage. That way we prevent transaction log growing exponentially.
+// TODO: If key already exists, and the transaction type is PUT, use UPDATE instead of INSERT.
 
 type TransactionLogger interface {
 	ReadTransactions() (<-chan *apitypes.Transaction, <-chan error)
@@ -100,7 +101,7 @@ func (l *PostgresTransactionLogger) createTables() error {
 			return fmt.Errorf("Failed to create int keys table %v", err)
 		}
 		if _, err := conn.Exec(context.Background(),
-			`CREATE TABLE IF NOT EXISTS "integer_transactions" (
+			`CREATE TABLE IF NOT EXISTS "int_transactions" (
 			"id" SERIAL,
 			"transaction_type" CHARACTER VARYING(32) NOT NULL,
 			"key_id" SERIAL,
@@ -261,8 +262,8 @@ func (l *PostgresTransactionLogger) ReadTransactions() (<-chan *apitypes.Transac
 
 		{
 			query := `SELECT "timestamp", "transaction_type", "key", "value"
-				FROM "integer_transactions" JOIN "int_keys" ON "int_keys"."id" = "integer_transactions"."key_id"
-				WHERE "integer_transactions"."key_id" IN (
+				FROM "int_transactions" JOIN "int_keys" ON "int_keys"."id" = "int_transactions"."key_id"
+				WHERE "int_transactions"."key_id" IN (
 					SELECT "id" FROM "int_keys"
 				);`
 
@@ -416,9 +417,21 @@ func (l *PostgresTransactionLogger) insertTransactionKey(dbConn *pgxpool.Conn, t
 	return &keyId, nil
 }
 
-func (l *PostgresTransactionLogger) Close() {
-	l.cancelFunc()
-	<-l.doneChan
+func (l *PostgresTransactionLogger) deleteTransactions(dbConn *pgxpool.Conn, keysTableName, transactionsTableName, key string) error {
+	// If DELETE transaction is received, we should delete all prior transactions from a database.
+	// TODO: Look up (ON DELETE CASCADE), that should do the trick instead of making two separate queries
+	rows, _ := dbConn.Query(context.Background(), fmt.Sprintf(`DELETE FROM "%s" WHERE "key" = ($1) RETURNING "id";`, keysTableName), key)
+	keyId, err := pgx.CollectOneRow(rows, pgx.RowTo[int32])
+	if err != nil {
+		return fmt.Errorf("Failed to delete key %s from table %s, error %v", key, keysTableName, err)
+	}
+
+	_, err = dbConn.Exec(context.Background(), fmt.Sprintf(`DELETE FROM "%s" WHERE "key_id" = ($1);`, transactionsTableName), keyId)
+	if err != nil {
+		return fmt.Errorf("Failed to delete transactions from table %s, error %v", transactionsTableName, err)
+	}
+
+	return nil
 }
 
 func (l *PostgresTransactionLogger) HandleTransactions() <-chan error {
@@ -452,15 +465,13 @@ func (l *PostgresTransactionLogger) HandleTransactions() <-chan error {
 						return
 					}
 					if transact.TxnType == apitypes.TransactionDel {
-						// If DELETE transaction received, remove all the transactions with the received key
-						// DELETE ON SCASCADE should delete the corresponding transactions from "int_transactions" table
-						// ON DELETE CASCADE: This allows the deletion of IDs that are referenced by a foreign key and also proceeds to cascadingly delete the referencing foreign key rows. For example, if we used this to delete an artist ID, all the artist’s affiliations with the artwork would also be deleted from the created table.
-						if _, err := dbConn.Exec(context.Background(), `DELETE FROM "int_keys" WHERE "key" = ($1);`, *keyId); err != nil {
-
+						if err = l.deleteTransactions(dbConn, "int_keys", "int_transactions", transact.Key); err != nil {
+							errorChan <- err
+							return
 						}
 					} else {
 						if _, err := dbConn.Exec(context.Background(),
-							`INSERT INTO "integer_transactions" ("timestamp", "transaction_type", "key_id", "value")
+							`INSERT INTO "int_transactions" ("timestamp", "transaction_type", "key_id", "value")
 							VALUES ($1, $2, $3, $4);`,
 							transact.Timestamp, apitypes.TransactionTypeName[int32(transact.TxnType)], *keyId, transact.Data,
 						); err != nil {
@@ -545,6 +556,11 @@ func (l *PostgresTransactionLogger) HandleTransactions() <-chan error {
 	}()
 
 	return errorChan
+}
+
+func (l *PostgresTransactionLogger) Close() {
+	l.cancelFunc()
+	<-l.doneChan
 }
 
 // //////////////////////////////////////////////////////////////////////////////////////////

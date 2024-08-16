@@ -88,14 +88,12 @@ func TestIntTransactions(t *testing.T) {
 		t.Fatalf("Failed to create postgres logger %v", err)
 	}
 	defer logger.Close()
+	_ = logger.HandleTransactions()
 
-	_ = logger.HandleTransactions() // ignore errors
-
-	// int transactions
-	list := make([]*apitypes.Transaction, 3)
-	list[0] = &apitypes.Transaction{Timestamp: time.Now(), StorageType: apitypes.StorageInt, TxnType: apitypes.TransactionPut, Key: "testintkey", Data: int32(897734)}
-	list[1] = &apitypes.Transaction{Timestamp: time.Now(), StorageType: apitypes.StorageInt, TxnType: apitypes.TransactionGet, Key: "testintkey"}
-	list[2] = &apitypes.Transaction{Timestamp: time.Now(), StorageType: apitypes.StorageInt, TxnType: apitypes.TransactionDel, Key: "testintkey"}
+	list := make([]*apitypes.Transaction, 0)
+	list = append(list, &apitypes.Transaction{Timestamp: time.Now(), StorageType: apitypes.StorageInt, TxnType: apitypes.TransactionPut, Key: "testintkey", Data: int32(897734)})
+	list = append(list, &apitypes.Transaction{Timestamp: time.Now(), StorageType: apitypes.StorageInt, TxnType: apitypes.TransactionGet, Key: "testintkey"})
+	list = append(list, &apitypes.Transaction{Timestamp: time.Now(), StorageType: apitypes.StorageInt, TxnType: apitypes.TransactionPut, Key: "testintkey", Data: int32(-7787)})
 
 	for _, txn := range list {
 		logger.WriteTransaction(txn)
@@ -103,25 +101,61 @@ func TestIntTransactions(t *testing.T) {
 
 	// wait a bit before reading
 	<-time.After(300 * time.Millisecond)
-
 	verifyTransactions(t, logger, list)
+
+	logger.WriteTransaction(&apitypes.Transaction{Timestamp: time.Now(), StorageType: apitypes.StorageInt, TxnType: apitypes.TransactionDel, Key: "testintkey"})
 }
 
 func TestFloatTransactions(t *testing.T) {
-	// float transactions
-	// transactList = append(transactList, &apitypes.Transaction{Timestamp: time.Now(), StorageType: apitypes.StorageFloat, TxnType: apitypes.TransactionPut, Key: "testfloatkey", Data: 3.141592653})
-	// transactList = append(transactList, &apitypes.Transaction{Timestamp: time.Now(), StorageType: apitypes.StorageFloat, TxnType: apitypes.TransactionGet, Key: "testfloatkey"})
-	// transactList = append(transactList, &apitypes.Transaction{Timestamp: time.Now(), StorageType: apitypes.StorageFloat, TxnType: apitypes.TransactionDel, Key: "testfloatkey"})
+	logger, err := NewPostgresTransactionLogger(postgresUrl)
+	if err != nil {
+		t.Fatalf("Failed to create postgres logger %v", err)
+	}
+	defer logger.Close()
+	_ = logger.HandleTransactions()
 
-	// // uint transactions
-	// transactList = append(transactList, &apitypes.Transaction{Timestamp: time.Now(), StorageType: apitypes.StorageUint, TxnType: apitypes.TransactionPut, Key: "testuintkey", Data: uint32(83400)})
-	// transactList = append(transactList, &apitypes.Transaction{Timestamp: time.Now(), StorageType: apitypes.StorageUint, TxnType: apitypes.TransactionGet, Key: "testuintkey"})
-	// transactList = append(transactList, &apitypes.Transaction{Timestamp: time.Now(), StorageType: apitypes.StorageUint, TxnType: apitypes.TransactionDel, Key: "testuintkey"})
+	list := make([]*apitypes.Transaction, 0)
+	list = append(list, &apitypes.Transaction{Timestamp: time.Now(), StorageType: apitypes.StorageFloat, TxnType: apitypes.TransactionPut, Key: "testfloatkey", Data: float32(3.141592653)})
+	list = append(list, &apitypes.Transaction{Timestamp: time.Now(), StorageType: apitypes.StorageFloat, TxnType: apitypes.TransactionGet, Key: "testfloatkey"})
+	list = append(list, &apitypes.Transaction{Timestamp: time.Now(), StorageType: apitypes.StorageFloat, TxnType: apitypes.TransactionGet, Key: "testfloatkey"})
 
-	// // map transactions
-	// mapData := map[string]string{"testkey1": "data1", "testkey2": "data2", "testkey3": "data3"}
-	// transactList = append(transactList, &apitypes.Transaction{Timestamp: time.Now(), StorageType: apitypes.StorageMap, TxnType: apitypes.TransactionPut, Key: "testmapkey", Data: mapData})
-	// transactList = append(transactList, &apitypes.Transaction{Timestamp: time.Now(), StorageType: apitypes.StorageMap, TxnType: apitypes.TransactionGet, Key: "testmapkey"})
-	// transactList = append(transactList, &apitypes.Transaction{Timestamp: time.Now(), StorageType: apitypes.StorageMap, TxnType: apitypes.TransactionDel, Key: "testmapkey"})
+	for _, txn := range list {
+		logger.WriteTransaction(txn)
+	}
 
+	// wait a bit before reading
+	<-time.After(3000 * time.Millisecond)
+	verifyTransactions(t, logger, list)
+
+	logger.WriteTransaction(&apitypes.Transaction{Timestamp: time.Now(), StorageType: apitypes.StorageFloat, TxnType: apitypes.TransactionDel, Key: "testfloatkey"})
 }
+
+func TestStringTransactions(t *testing.T) {
+	logger, err := NewPostgresTransactionLogger(postgresUrl)
+	if err != nil {
+		t.Fatalf("Failed to create postgres logger %v", err)
+	}
+	defer logger.Close()
+	_ = logger.HandleTransactions()
+
+	list := make([]*apitypes.Transaction, 0)
+	list = append(list, &apitypes.Transaction{Timestamp: time.Now(), StorageType: apitypes.StorageString, TxnType: apitypes.TransactionPut, Key: "teststringkey", Data: "testvalue"})
+	list = append(list, &apitypes.Transaction{Timestamp: time.Now(), StorageType: apitypes.StorageString, TxnType: apitypes.TransactionGet, Key: "teststringkey"})
+	list = append(list, &apitypes.Transaction{Timestamp: time.Now(), StorageType: apitypes.StorageString, TxnType: apitypes.TransactionGet, Key: "teststringkey"})
+
+	for _, txn := range list {
+		logger.WriteTransaction(txn)
+	}
+
+	// wait a bit before reading
+	<-time.After(3000 * time.Millisecond)
+	verifyTransactions(t, logger, list)
+
+	logger.WriteTransaction(&apitypes.Transaction{Timestamp: time.Now(), StorageType: apitypes.StorageString, TxnType: apitypes.TransactionDel, Key: "teststringkey"})
+}
+
+// // map transactions
+// mapData := map[string]string{"testkey1": "data1", "testkey2": "data2", "testkey3": "data3"}
+// transactList = append(transactList, &apitypes.Transaction{Timestamp: time.Now(), StorageType: apitypes.StorageMap, TxnType: apitypes.TransactionPut, Key: "testmapkey", Data: mapData})
+// transactList = append(transactList, &apitypes.Transaction{Timestamp: time.Now(), StorageType: apitypes.StorageMap, TxnType: apitypes.TransactionGet, Key: "testmapkey"})
+// transactList = append(transactList, &apitypes.Transaction{Timestamp: time.Now(), StorageType: apitypes.StorageMap, TxnType: apitypes.TransactionDel, Key: "testmapkey"})
