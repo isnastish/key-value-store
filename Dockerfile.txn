@@ -20,6 +20,6 @@ EXPOSE 5051/tcp
 CMD [ "/txn/txn", \
     "-private_key_file", "../certs/server.key", \
     "-public_key_file", "../certs/server.crt", \
-    "-ca_public_key_file", "../certs/ca.crt" \
+    "-ca_public_key_file", "../certs/ca.crt", \
     "-postgres_endpoint", "postgresql://postgres:nastish@postgres-db:5432/postgres?sslmode=disable" \
 ]

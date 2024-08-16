@@ -203,8 +203,8 @@ func (l *PostgresTransactionLogger) createTables() error {
 		}
 		if _, err := conn.Exec(context.Background(),
 			`CREATE TABLE IF NOT EXISTS "map_key_value_pairs" (
-			"transaction_id" SERIAL NOT NULL,
-			"map_key_id" SERIAL NOT NULL,
+			"transaction_id" SERIAL,
+			"map_key_id" SERIAL,
 			"key" TEXT NOT NULL,
 			"value" TEXT NOT NULL,
 			FOREIGN KEY("map_key_id") REFERENCES "map_keys"("id"),
@@ -485,13 +485,20 @@ func (l *PostgresTransactionLogger) HandleTransactions() <-chan error {
 						errorChan <- err
 						return
 					}
-					if _, err := dbConn.Exec(context.Background(),
-						`INSERT INTO "uint_transactions" ("timestamp", "transaction_type", "key_id", "value")
-						VALUES ($1, $2, $3, $4);`,
-						transact.Timestamp, apitypes.TransactionTypeName[int32(transact.TxnType)], *keyId, transact.Data,
-					); err != nil {
-						errorChan <- fmt.Errorf("Failed to write uint transaction %v", err)
-						return
+					if transact.TxnType == apitypes.TransactionDel {
+						if err = l.deleteTransactions(dbConn, "uint_keys", "uint_transactions", transact.Key); err != nil {
+							errorChan <- err
+							return
+						}
+					} else {
+						if _, err := dbConn.Exec(context.Background(),
+							`INSERT INTO "uint_transactions" ("timestamp", "transaction_type", "key_id", "value")
+							VALUES ($1, $2, $3, $4);`,
+							transact.Timestamp, apitypes.TransactionTypeName[int32(transact.TxnType)], *keyId, transact.Data,
+						); err != nil {
+							errorChan <- fmt.Errorf("Failed to write uint transaction %v", err)
+							return
+						}
 					}
 
 				case apitypes.StorageFloat:
@@ -499,13 +506,20 @@ func (l *PostgresTransactionLogger) HandleTransactions() <-chan error {
 						errorChan <- err
 						return
 					}
-					if _, err := dbConn.Exec(context.Background(),
-						`INSERT INTO "float_transactions" ("timestamp", "transaction_type", "key_id", "value")
-						VALUES ($1, $2, $3, $4);`,
-						transact.Timestamp, apitypes.TransactionTypeName[int32(transact.TxnType)], *keyId, transact.Data,
-					); err != nil {
-						errorChan <- fmt.Errorf("Failed to write float transaction %v", err)
-						return
+					if transact.TxnType == apitypes.TransactionDel {
+						if err = l.deleteTransactions(dbConn, "float_keys", "float_transactions", transact.Key); err != nil {
+							errorChan <- err
+							return
+						}
+					} else {
+						if _, err := dbConn.Exec(context.Background(),
+							`INSERT INTO "float_transactions" ("timestamp", "transaction_type", "key_id", "value")
+							VALUES ($1, $2, $3, $4);`,
+							transact.Timestamp, apitypes.TransactionTypeName[int32(transact.TxnType)], *keyId, transact.Data,
+						); err != nil {
+							errorChan <- fmt.Errorf("Failed to write float transaction %v", err)
+							return
+						}
 					}
 
 				case apitypes.StorageString:
@@ -513,16 +527,24 @@ func (l *PostgresTransactionLogger) HandleTransactions() <-chan error {
 						errorChan <- err
 						return
 					}
-					if _, err = dbConn.Exec(context.Background(),
-						`INSERT INTO "string_transactions" ("timestamp", "transaction_type", "key_id", "value")
+					if transact.TxnType == apitypes.TransactionDel {
+						if err = l.deleteTransactions(dbConn, "string_keys", "string_transactions", transact.Key); err != nil {
+							errorChan <- err
+							return
+						}
+					} else {
+						if _, err = dbConn.Exec(context.Background(),
+							`INSERT INTO "string_transactions" ("timestamp", "transaction_type", "key_id", "value")
 						VALUES ($1, $2, $3, $4);`,
-						transact.Timestamp, apitypes.TransactionTypeName[int32(transact.TxnType)], *keyId, transact.Data,
-					); err != nil {
-						errorChan <- fmt.Errorf("Failed to write string transaction %v", err)
-						return
+							transact.Timestamp, apitypes.TransactionTypeName[int32(transact.TxnType)], *keyId, transact.Data,
+						); err != nil {
+							errorChan <- fmt.Errorf("Failed to write string transaction %v", err)
+							return
+						}
 					}
 
 				case apitypes.StorageMap:
+					// Deletion from map table is a bit involved
 					if keyId, err = l.insertTransactionKey(dbConn, transact, "map_keys"); err != nil {
 						errorChan <- err
 						return

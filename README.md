@@ -52,8 +52,8 @@ CREATE TABLE IF NOT EXISTS "map_transactions" (
 
 --table for storing map key-value pairs (for `put` transactions)
 CREATE TABLE IF NOT EXISTS "map_key_value_pairs" (
-    "transaction_id" SERIAL NOT NULL,
-    "map_key_id" SERIAL NOT NULL,
+    "transaction_id" SERIAL,
+    "map_key_id" SERIAL,
     "key" TEXT NOT NULL,
     "value" TEXT NOT NULL,
     FOREIGN KEY("map_key_id") REFERENCES "map_keys"("id"),
