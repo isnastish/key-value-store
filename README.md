@@ -11,3 +11,22 @@ Once your service is running, the simplest way of testing the storage would be t
 
 ## Security
 Key-value storage service uses [mTLS](https://en.wikipedia.org/wiki/Mutual_authentication) (mutual TLS) protocol to authenticate with a transaction service.
+
+## Database
+```sql
+CREATE TABLE IF NOT EXISTS "int_keys" (
+    "id" SERIAL,
+    "key" TEXT NOT NULL UNIQUE, 
+    PRIMARY KEY("id")
+);
+
+CREATE TABLE IF NOT EXISTS "integer_transactions" (
+    "id" SERIAL,
+    "transaction_type" CHARACTER VARYING(32) NOT NULL,
+    "key_id" SERIAL,
+    "value" INTEGER,
+    "timestamp" TIMESTAMP NOT NULL DEFAULT NOW(),
+    PRIMARY KEY("id"),
+    FOREIGN KEY("key_id") REFERENCES "int_keys"("id") ON DELETE CASCADE
+);
+```
