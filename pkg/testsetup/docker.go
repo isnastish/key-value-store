@@ -56,6 +56,7 @@ func startDockerContainer(expectedOutput, command string, args ...string) (bool,
 			}
 		}
 	}
+	<-time.After(200 * time.Millisecond)
 	return tearDown, nil
 }
 

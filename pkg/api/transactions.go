@@ -7,7 +7,7 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/isnastish/kvs/pkg/txn"
+	"github.com/isnastish/kvs/pkg/txn_service"
 	"github.com/isnastish/kvs/proto/api"
 
 	"github.com/isnastish/kvs/pkg/apitypes"
@@ -16,7 +16,7 @@ import (
 
 type transactionServer struct {
 	api.UnimplementedTransactionServiceServer
-	service     *txn.TransactionService
+	service     *txn_service.TransactionService
 	serviceDesc *grpc.ServiceDesc
 }
 
@@ -24,7 +24,7 @@ func (s *transactionServer) ServiceDesc() *grpc.ServiceDesc {
 	return s.serviceDesc
 }
 
-func NewTransactionServer(service *txn.TransactionService) *transactionServer {
+func NewTransactionServer(service *txn_service.TransactionService) *transactionServer {
 	return &transactionServer{
 		service:     service,
 		serviceDesc: &api.TransactionService_ServiceDesc,
@@ -81,11 +81,11 @@ func (s *transactionServer) ReadTransactions(_ *emptypb.Empty, stream api.Transa
 			}
 
 		case err := <-errorChan:
-			if err == io.EOF {
-				log.Logger.Info("Done reading transactions")
-				return nil
+			if err != io.EOF && err != nil {
+				return err
 			}
-			return err
+			log.Logger.Info("Done reading transactions")
+			return nil
 		}
 	}
 }

@@ -11,6 +11,8 @@ import (
 	"os/signal"
 	"syscall"
 
+	_ "github.com/google/uuid"
+
 	"github.com/isnastish/kvs/pkg/kvs"
 	"github.com/isnastish/kvs/pkg/log"
 	"github.com/isnastish/kvs/proto/api"
@@ -48,7 +50,7 @@ func main() {
 
 	flag.StringVar(&settings.Endpoint, "endpoint", ":8080", "Address to run a key-value storage on")
 	flag.BoolVar(&settings.TransactionsDisabled, "txn_disabled", false, "Disable transactions. Enabled by default")
-	logLevel := flag.String("log_level", "debug", "Set global logging level. Feasible values are: (debug|info|warn|error|fatal|panic|disabled)")
+	logLevel := flag.String("log_level", "info", "Log level")
 	txnPort := flag.Uint("txn_port", 5051, "Transaction service listening port")
 	clientPrivateKeyFile := flag.String("private_key_file", "", "File containing cient private RSA key")
 	clientPublicKeyFile := flag.String("public_key_file", "", "File containing client public X509 key")
