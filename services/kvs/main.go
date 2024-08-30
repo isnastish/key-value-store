@@ -10,21 +10,29 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-
-	_ "github.com/google/uuid"
+	"time"
 
 	"github.com/isnastish/kvs/pkg/kvs"
 	"github.com/isnastish/kvs/pkg/log"
 	"github.com/isnastish/kvs/proto/api"
+
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 
-	_ "github.com/golang-jwt/jwt/v5"
+	"github.com/golang-jwt/jwt/v5"
+	_ "github.com/google/uuid"
 )
 
 // NOTE: Experimental basic authentication
 
 const authHeaderPrefix = "Bearer "
+
+type JWTClaims struct {
+	Username string `json:"username,omitempty"`
+	Password string `json:"password,omitempty"`
+
+	jwt.RegisteredClaims
+}
 
 type basicAuth struct {
 	username string
@@ -52,9 +60,10 @@ func main() {
 	flag.BoolVar(&settings.TransactionsDisabled, "txn_disabled", false, "Disable transactions. Enabled by default")
 	logLevel := flag.String("log_level", "info", "Log level")
 	txnPort := flag.Uint("txn_port", 5051, "Transaction service listening port")
-	clientPrivateKeyFile := flag.String("private_key_file", "", "File containing cient private RSA key")
-	clientPublicKeyFile := flag.String("public_key_file", "", "File containing client public X509 key")
-	caPublicKeyFile := flag.String("ca_public_key_file", "", "Public key of a CA used to sign all public certificates")
+	clientPrivateKeyFile := flag.String("private_key", "", "File containing cient private RSA key")
+	clientPublicKeyFile := flag.String("public_key", "", "File containing client public X509 key")
+	caPublicKeyFile := flag.String("ca_public_key", "", "Public key of a CA used to sign all public certificates")
+	jwtSigningKey := flag.String("jwt_signing_key", "", "Private key to sign JWT token")
 
 	flag.Parse()
 
@@ -82,8 +91,20 @@ func main() {
 	}
 
 	///////////////////////////////////////////////////////////////////////////////
-	// JWT token
+	// JWT authentication
+	claims := JWTClaims{
+		"saml",
+		"saml",
 
+		jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)), // expires in 24h
+		},
+	}
+
+	_ = claims
+	_ = jwtSigningKey
+
+	///////////////////////////////////////////////////////////////////////////////
 	// NOTE: Just for testing basic authentication
 	auth := basicAuth{
 		username: "saml",

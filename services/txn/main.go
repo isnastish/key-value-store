@@ -11,9 +11,11 @@ import (
 	"strings"
 	"syscall"
 
+	_ "github.com/golang-jwt/jwt/v5"
 	"github.com/isnastish/kvs/pkg/api"
 	"github.com/isnastish/kvs/pkg/log"
 	"github.com/isnastish/kvs/pkg/txn_service"
+
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -66,9 +68,9 @@ func main() {
 	logLevel := flag.String("log_level", "info", "Log level")
 	grpcPort := flag.Uint("grpc_port", 5051, "GRPC listening port")
 	loggerBackend := flag.String("backend", "postgres", "Backend for logging transactions [file|postgres]")
-	serverPrivateKeyFile := flag.String("private_key_file", "", "Server private RSA key")
-	serverPublicKeyFile := flag.String("public_key_file", "", "Server public X509 key")
-	caPublicKeyFile := flag.String("ca_public_key_file", "", "Public kye of a CA used to sign all public certificates")
+	serverPrivateKeyFile := flag.String("private_key", "", "Server private RSA key")
+	serverPublicKeyFile := flag.String("public_key", "", "Server public X509 key")
+	caPublicKeyFile := flag.String("ca_public_key", "", "Public kye of a CA used to sign all public certificates")
 
 	flag.Parse()
 
