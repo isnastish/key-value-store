@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"crypto"
 	"crypto/tls"
 	"crypto/x509"
@@ -14,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	jwtauth "github.com/isnastish/kvs/pkg/jwt_auth"
 	"github.com/isnastish/kvs/pkg/kvs"
 	"github.com/isnastish/kvs/pkg/log"
 	"github.com/isnastish/kvs/proto/api"
@@ -22,35 +22,7 @@ import (
 	"google.golang.org/grpc/credentials"
 
 	"github.com/golang-jwt/jwt/v5"
-	_ "github.com/google/uuid"
 )
-
-type JWTClaims struct {
-	// We use username and password, but it could be anything,
-	// for example a project name, namespace etc.
-	Username string `json:"username,omitempty"`
-	Password string `json:"password,omitempty"`
-
-	jwt.RegisteredClaims
-}
-
-type JWTAuthManager struct {
-	token string
-}
-
-func (b JWTAuthManager) GetRequestMetadata(ctx context.Context, uri ...string) (map[string]string, error) {
-	log.Logger.Info("Requested metadata")
-
-	return map[string]string{
-		"authorization": "Bearer " + b.token,
-	}, nil
-}
-
-func (b JWTAuthManager) RequireTransportSecurity() bool {
-	log.Logger.Info("Require transaport security was called")
-
-	return true
-}
 
 func main() {
 	var settings kvs.ServiceSettings
@@ -88,12 +60,11 @@ func main() {
 
 	///////////////////////////////////////////////////////////////////////////////
 	// JWT authentication
-	claims := JWTClaims{
+	claims := jwtauth.JWTClaims{
 		// NOTE: These should come from environment variables
-		"saml",
-		"saml",
-
-		jwt.RegisteredClaims{
+		Username: "saml",
+		Password: "saml",
+		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)), // expires in 24h
 		},
 	}
@@ -132,8 +103,8 @@ func main() {
 		log.Logger.Fatal("Failed to create signed jwt token %v", err)
 	}
 
-	jwtAuthManager := JWTAuthManager{
-		token: token,
+	jwtAuthManager := jwtauth.JWTAuthManager{
+		Token: token,
 	}
 
 	///////////////////////////////////////////////////////////////////////////////

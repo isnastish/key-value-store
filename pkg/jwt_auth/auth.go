@@ -1,6 +1,7 @@
 package jwtauth
 
 import (
+	"context"
 	"crypto"
 	"fmt"
 	"os"
@@ -48,4 +49,27 @@ func (v *JWTValidator) ValidateToken(tokenString string) error {
 	}
 
 	return nil
+}
+
+type JWTClaims struct {
+	// We use username and password, but it could be anything,
+	// for example a project name, namespace etc.
+	Username string `json:"username,omitempty"`
+	Password string `json:"password,omitempty"`
+
+	jwt.RegisteredClaims
+}
+
+type JWTAuthManager struct {
+	Token string
+}
+
+func (b JWTAuthManager) GetRequestMetadata(ctx context.Context, uri ...string) (map[string]string, error) {
+	return map[string]string{
+		"authorization": "Bearer " + b.Token,
+	}, nil
+}
+
+func (b JWTAuthManager) RequireTransportSecurity() bool {
+	return true
 }
