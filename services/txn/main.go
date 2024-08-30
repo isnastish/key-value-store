@@ -106,6 +106,8 @@ func readTransactionsStremInterceptor(srv interface{}, ss grpc.ServerStream,
 		return status.Errorf(codes.Unauthenticated, fmt.Sprintf("failed to validate token %v", err))
 	}
 
+	log.Logger.Info("Authorized")
+
 	err = handler(srv, ss)
 	if err != nil {
 		log.Logger.Info("Failed to invoke streaming RPC with error %v", err)

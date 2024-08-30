@@ -56,41 +56,6 @@ func (b JWTAuthManager) RequireTransportSecurity() bool {
 	return true
 }
 
-type JWTValidator struct {
-	key crypto.PublicKey
-}
-
-func NewTokenValidator(publicKeyPath string) (*JWTValidator, error) {
-	keyBytes, err := os.ReadFile(publicKeyPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read public key file %v", err)
-	}
-	pubKey, err := jwt.ParseRSAPublicKeyFromPEM(keyBytes)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse public key %v", err)
-	}
-
-	return &JWTValidator{key: pubKey}, nil
-}
-
-func (v *JWTValidator) GetToken(tokenString string) (*jwt.Token, error) {
-	// TODO: How do we check whether the claims are correct?
-	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
-		// Figure out whether the token came from somebody we trust.
-		// check whether a token uses expected signing method.
-		if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {
-			return nil, fmt.Errorf("unexpected signing method")
-		}
-		return v.key, nil
-	})
-
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse token %v", err)
-	}
-
-	return token, nil
-}
-
 func main() {
 	var settings kvs.ServiceSettings
 
@@ -143,12 +108,11 @@ func main() {
 	}
 
 	// NOTE: Instead of parsing manually, jwt could parse a private key for us.
-	privateKey, err := jwt.ParseRSAPrivateKeyFromPEM(jwtPrivateKeyContents)
-	if err != nil {
-		log.Logger.Fatal("Failed to parse private key %v", err)
-	}
-
-	_ = privateKey
+	//	privateKey, err := jwt.ParseRSAPrivateKeyFromPEM(jwtPrivateKeyContents)
+	//	if err != nil {
+	//		log.Logger.Fatal("Failed to parse private key %v", err)
+	//	}
+	//
 
 	var key crypto.PrivateKey
 	pemBlock, _ := pem.Decode([]byte(jwtPrivateKeyContents))
@@ -204,7 +168,7 @@ func main() {
 		),
 	}
 
-	txnServiceAddr := fmt.Sprintf("transaction-service: %d", *txnPort)
+	txnServiceAddr := fmt.Sprintf("transaction-service:%d", *txnPort)
 	grpcClient, err := grpc.NewClient(txnServiceAddr, options...)
 	if err != nil {
 		log.Logger.Fatal("Failed to create grpc client %v", err)
