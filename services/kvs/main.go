@@ -104,6 +104,7 @@ func main() {
 	_ = claims
 	_ = jwtSigningKey
 
+	log.Logger.Info("Claims: %v", claims)
 	///////////////////////////////////////////////////////////////////////////////
 	// NOTE: Just for testing basic authentication
 	auth := basicAuth{
