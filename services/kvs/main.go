@@ -155,6 +155,7 @@ func main() {
 	//	log.Logger.Info("Token claims: %v", validToken.Claims)
 	//
 	///////////////////////////////////////////////////////////////////////////////
+
 	options := []grpc.DialOption{
 		grpc.WithPerRPCCredentials(jwtAuthManager),
 		grpc.WithTransportCredentials(

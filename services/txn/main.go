@@ -80,6 +80,7 @@ func readTransactionsStremInterceptor(srv interface{}, ss grpc.ServerStream,
 		return status.Errorf(codes.InvalidArgument, "missing authorization header")
 	}
 
+	// auth has the following form [Bearer <token>]
 	if len(auth) == 0 {
 		log.Logger.Error("Authorization header is empty")
 		return status.Errorf(codes.InvalidArgument, "authorization header is empty")
