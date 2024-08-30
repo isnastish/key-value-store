@@ -93,6 +93,7 @@ func main() {
 	///////////////////////////////////////////////////////////////////////////////
 	// JWT authentication
 	claims := JWTClaims{
+		// NOTE: These should come from environment variables
 		"saml",
 		"saml",
 
