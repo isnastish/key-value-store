@@ -85,8 +85,13 @@ func readTransactionsStremInterceptor(srv interface{}, ss grpc.ServerStream,
 		return status.Errorf(codes.Unauthenticated, fmt.Sprintf("failed to create token validator %v", err))
 	}
 
+	tokenString, found := strings.CutPrefix(auth[0], authBearerPrefix)
+	if !found {
+		return status.Errorf(codes.Unauthenticated, "malformed token string")
+	}
+
 	// NOTE: We don't need the token, instead we could rename GetToken to ValidateToken
-	token, err := tokenValidator.GetToken(strings.Trim(auth[0], authBearerPrefix))
+	token, err := tokenValidator.GetToken(tokenString)
 	if err != nil {
 		return status.Errorf(codes.Unauthenticated, fmt.Sprintf("failed to validate token %v", err))
 	}
