@@ -1,11 +1,9 @@
 package main
 
 import (
-	"context"
 	"crypto"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/base64"
 	"flag"
 	"fmt"
 	"os"
@@ -25,11 +23,13 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+const authBearerPrefix = "Bearer "
+
 type JWTValidator struct {
 	key crypto.PublicKey
 }
 
-func NewValidator(publicKeyPath string) (*JWTValidator, error) {
+func NewTokenValidator(publicKeyPath string) (*JWTValidator, error) {
 	keyBytes, err := os.ReadFile(publicKeyPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read public key file %v", err)
@@ -59,38 +59,41 @@ func (v *JWTValidator) GetToken(tokenString string) (*jwt.Token, error) {
 	return token, nil
 }
 
-func validateBasicCredentials(incomingCtx context.Context) error {
-	md, ok := metadata.FromIncomingContext(incomingCtx)
+func readTransactionsStremInterceptor(srv interface{}, ss grpc.ServerStream,
+	info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+
+	// NOTE: We should be able to use fmt.Errorf instead of status package,
+	// What would be the difference?
+	metadata, ok := metadata.FromIncomingContext(ss.Context())
 	if !ok {
 		return status.Errorf(codes.InvalidArgument, "missing credentials metadata")
 	}
 
-	if auth, ok := md["authorization"]; ok {
-		if len(auth) > 0 {
-			token := strings.TrimPrefix(auth[0], "Basic ")
-			if token == base64.StdEncoding.EncodeToString([]byte("saml:saml")) {
-				return nil
-			}
-		}
+	auth, ok := metadata["authorization"]
+	if !ok {
+		return status.Errorf(codes.InvalidArgument, "missing authorization header")
 	}
 
-	return status.Errorf(codes.Unauthenticated, "invalid credentials token")
-}
+	if len(auth) == 0 {
+		return status.Errorf(codes.InvalidArgument, "authorization header is empty")
+	}
 
-// //////////////////////////////////////////////////////////////////
-// Server-side stream interceptor
-func readTransactionsStremInterceptor(srv interface{}, ss grpc.ServerStream,
-	info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+	// NOTE: The problem here is that we parse the file which contains a public key every time an RPC is invoked,
+	// but instead we should do it only once.
+	tokenValidator, err := NewTokenValidator("../../certs/jwt_public.pem")
+	if err != nil {
+		return status.Errorf(codes.Unauthenticated, fmt.Sprintf("failed to create token validator %v", err))
+	}
 
-	log.Logger.Info("Invoked server streaming interceptor")
-	//	if err := validateBasicCredentials(ss.Context()); err != nil {
-	//		log.Logger.Error("Authorization failed %v", err)
-	//		return err
-	//	}
-	//
-	log.Logger.Info("Authorization succeeded")
+	// NOTE: We don't need the token, instead we could rename GetToken to ValidateToken
+	token, err := tokenValidator.GetToken(strings.Trim(auth[0], authBearerPrefix))
+	if err != nil {
+		return status.Errorf(codes.Unauthenticated, fmt.Sprintf("failed to validate token %v", err))
+	}
 
-	err := handler(srv, ss)
+	_ = token
+
+	err = handler(srv, ss)
 	if err != nil {
 		log.Logger.Info("Failed to invoke streaming RPC with error %v", err)
 	}

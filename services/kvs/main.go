@@ -186,15 +186,16 @@ func main() {
 	if err != nil {
 		log.Logger.Fatal("Unable to get validated token %v", err)
 	}
-	_ = validToken
+
+	log.Logger.Info("Token header: %v", validToken.Header)
+	log.Logger.Info("Token claims: %v", validToken.Claims)
 
 	///////////////////////////////////////////////////////////////////////////////
 	options := []grpc.DialOption{
-		// authenticate on each grpc call,
 		grpc.WithPerRPCCredentials(jwtAuthManager),
 		grpc.WithTransportCredentials(
 			credentials.NewTLS(&tls.Config{
-				// NOTE: Server name should be equal to Common Name on the certificate
+				// IMPORTANT: Server name should be equal to Common Name on the certificate
 				ServerName:   "localhost",
 				Certificates: []tls.Certificate{cert},
 				RootCAs:      certPool,
@@ -203,7 +204,7 @@ func main() {
 		),
 	}
 
-	txnServiceAddr := fmt.Sprintf("transaction-service:%d", *txnPort)
+	txnServiceAddr := fmt.Sprintf("transaction-service: %d", *txnPort)
 	grpcClient, err := grpc.NewClient(txnServiceAddr, options...)
 	if err != nil {
 		log.Logger.Fatal("Failed to create grpc client %v", err)
