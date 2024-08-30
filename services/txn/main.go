@@ -133,7 +133,7 @@ func main() {
 	transactionService := txn_service.NewTransactionService(transactLogger)
 
 	// pass TLS credentials to create  secure grpc server
-	grpcServer := myapi.NewGRPCServer(myapi.NewTransactionServer(transactionService), options...)
+	grpcServer := myapi.NewGRPCServer(options, myapi.NewTransactionServer(transactionService))
 
 	doneChan := make(chan bool, 1)
 	osSigChan := make(chan os.Signal, 1)

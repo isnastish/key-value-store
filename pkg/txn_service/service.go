@@ -434,6 +434,113 @@ func (l *PostgresTransactionLogger) deleteTransactions(dbConn *pgxpool.Conn, key
 	return nil
 }
 
+func (l *PostgresTransactionLogger) insertTransaction(dbConn *pgxpool.Conn, transact *apitypes.Transaction) error {
+	var keyId *int32
+	var err error
+
+	switch transact.StorageType {
+	case apitypes.StorageInt:
+		if keyId, err = l.insertTransactionKey(dbConn, transact, "int_keys"); err != nil {
+			return err
+		}
+		if transact.TxnType == apitypes.TransactionDel {
+			if err = l.deleteTransactions(dbConn, "int_keys", "int_transactions", transact.Key); err != nil {
+				return err
+			}
+		} else {
+			if _, err := dbConn.Exec(context.Background(),
+				`INSERT INTO "int_transactions" ("timestamp", "transaction_type", "key_id", "value")
+							VALUES ($1, $2, $3, $4);`,
+				transact.Timestamp, apitypes.TransactionTypeName[int32(transact.TxnType)], *keyId, transact.Data,
+			); err != nil {
+				return fmt.Errorf("txn(postgres): failed to write int transaction %v", err)
+			}
+		}
+
+	case apitypes.StorageUint:
+		if keyId, err = l.insertTransactionKey(dbConn, transact, "uint_keys"); err != nil {
+			return err
+		}
+		if transact.TxnType == apitypes.TransactionDel {
+			if err = l.deleteTransactions(dbConn, "uint_keys", "uint_transactions", transact.Key); err != nil {
+				return err
+			}
+		} else {
+			if _, err := dbConn.Exec(context.Background(),
+				`INSERT INTO "uint_transactions" ("timestamp", "transaction_type", "key_id", "value")
+							VALUES ($1, $2, $3, $4);`,
+				transact.Timestamp, apitypes.TransactionTypeName[int32(transact.TxnType)], *keyId, transact.Data,
+			); err != nil {
+				return fmt.Errorf("Failed to write uint transaction %v", err)
+			}
+		}
+
+	case apitypes.StorageFloat:
+		if keyId, err = l.insertTransactionKey(dbConn, transact, "float_keys"); err != nil {
+			return err
+		}
+		if transact.TxnType == apitypes.TransactionDel {
+			if err = l.deleteTransactions(dbConn, "float_keys", "float_transactions", transact.Key); err != nil {
+				return err
+			}
+		} else {
+			if _, err := dbConn.Exec(context.Background(),
+				`INSERT INTO "float_transactions" ("timestamp", "transaction_type", "key_id", "value")
+							VALUES ($1, $2, $3, $4);`,
+				transact.Timestamp, apitypes.TransactionTypeName[int32(transact.TxnType)], *keyId, transact.Data,
+			); err != nil {
+				return fmt.Errorf("Failed to write float transaction %v", err)
+			}
+		}
+
+	case apitypes.StorageString:
+		if keyId, err = l.insertTransactionKey(dbConn, transact, "string_keys"); err != nil {
+			return err
+		}
+		if transact.TxnType == apitypes.TransactionDel {
+			if err = l.deleteTransactions(dbConn, "string_keys", "string_transactions", transact.Key); err != nil {
+				return err
+			}
+		} else {
+			if _, err = dbConn.Exec(context.Background(),
+				`INSERT INTO "string_transactions" ("timestamp", "transaction_type", "key_id", "value")
+						VALUES ($1, $2, $3, $4);`,
+				transact.Timestamp, apitypes.TransactionTypeName[int32(transact.TxnType)], *keyId, transact.Data,
+			); err != nil {
+				return fmt.Errorf("Failed to write string transaction %v", err)
+			}
+		}
+
+	case apitypes.StorageMap:
+		// Deletion from map table is a bit involved
+		if keyId, err = l.insertTransactionKey(dbConn, transact, "map_keys"); err != nil {
+			return err
+		}
+		rows, _ := dbConn.Query(context.Background(),
+			`INSERT INTO "map_transactions" ("timestamp", "transaction_type", "key_id") VALUES ($1, $2, $3) RETURNING "id";`,
+			transact.Timestamp, apitypes.TransactionTypeName[int32(transact.TxnType)], *keyId,
+		)
+		transactId, err := pgx.CollectOneRow(rows, pgx.RowTo[int32])
+		if err != nil {
+			return fmt.Errorf("Failed to query map transaction id %v", err)
+		}
+		if transact.Data != nil {
+			batch := &pgx.Batch{}
+			for key, value := range transact.Data.(map[string]string) {
+				batch.Queue(
+					`INSERT INTO "map_key_value_pairs" ("transaction_id", "map_key_id", "key", "value") 
+								VALUES ($1, $2, $3, $4);`,
+					transactId, *keyId, key, value)
+			}
+			err = dbConn.SendBatch(context.Background(), batch).Close()
+			if err != nil {
+				return fmt.Errorf("Failed to insert into map key value pairs table %v", err)
+			}
+		}
+	}
+	return nil
+}
+
 func (l *PostgresTransactionLogger) HandleTransactions() <-chan error {
 	errorChan := make(chan error)
 
@@ -450,128 +557,24 @@ func (l *PostgresTransactionLogger) HandleTransactions() <-chan error {
 			select {
 			case <-l.ctx.Done():
 				if len(l.transactChan) > 0 {
-					// TODO: Finish writing pending transactions
+					// NOTE: If the context was canceled, make sure we write all the pending events into the database.
+					log.Logger.Info("Writing pending transactions")
+
+					for transact := range l.transactChan {
+						err := l.insertTransaction(dbConn, transact)
+						if err != nil {
+							errorChan <- err
+							return
+						}
+					}
 				}
 				return
 
 			case transact := <-l.transactChan:
-				var keyId *int32
-				var err error
-
-				switch transact.StorageType {
-				case apitypes.StorageInt:
-					if keyId, err = l.insertTransactionKey(dbConn, transact, "int_keys"); err != nil {
-						errorChan <- err
-						return
-					}
-					if transact.TxnType == apitypes.TransactionDel {
-						if err = l.deleteTransactions(dbConn, "int_keys", "int_transactions", transact.Key); err != nil {
-							errorChan <- err
-							return
-						}
-					} else {
-						if _, err := dbConn.Exec(context.Background(),
-							`INSERT INTO "int_transactions" ("timestamp", "transaction_type", "key_id", "value")
-							VALUES ($1, $2, $3, $4);`,
-							transact.Timestamp, apitypes.TransactionTypeName[int32(transact.TxnType)], *keyId, transact.Data,
-						); err != nil {
-							errorChan <- fmt.Errorf("txn(postgres): failed to write int transaction %v", err)
-							return
-						}
-					}
-
-				case apitypes.StorageUint:
-					if keyId, err = l.insertTransactionKey(dbConn, transact, "uint_keys"); err != nil {
-						errorChan <- err
-						return
-					}
-					if transact.TxnType == apitypes.TransactionDel {
-						if err = l.deleteTransactions(dbConn, "uint_keys", "uint_transactions", transact.Key); err != nil {
-							errorChan <- err
-							return
-						}
-					} else {
-						if _, err := dbConn.Exec(context.Background(),
-							`INSERT INTO "uint_transactions" ("timestamp", "transaction_type", "key_id", "value")
-							VALUES ($1, $2, $3, $4);`,
-							transact.Timestamp, apitypes.TransactionTypeName[int32(transact.TxnType)], *keyId, transact.Data,
-						); err != nil {
-							errorChan <- fmt.Errorf("Failed to write uint transaction %v", err)
-							return
-						}
-					}
-
-				case apitypes.StorageFloat:
-					if keyId, err = l.insertTransactionKey(dbConn, transact, "float_keys"); err != nil {
-						errorChan <- err
-						return
-					}
-					if transact.TxnType == apitypes.TransactionDel {
-						if err = l.deleteTransactions(dbConn, "float_keys", "float_transactions", transact.Key); err != nil {
-							errorChan <- err
-							return
-						}
-					} else {
-						if _, err := dbConn.Exec(context.Background(),
-							`INSERT INTO "float_transactions" ("timestamp", "transaction_type", "key_id", "value")
-							VALUES ($1, $2, $3, $4);`,
-							transact.Timestamp, apitypes.TransactionTypeName[int32(transact.TxnType)], *keyId, transact.Data,
-						); err != nil {
-							errorChan <- fmt.Errorf("Failed to write float transaction %v", err)
-							return
-						}
-					}
-
-				case apitypes.StorageString:
-					if keyId, err = l.insertTransactionKey(dbConn, transact, "string_keys"); err != nil {
-						errorChan <- err
-						return
-					}
-					if transact.TxnType == apitypes.TransactionDel {
-						if err = l.deleteTransactions(dbConn, "string_keys", "string_transactions", transact.Key); err != nil {
-							errorChan <- err
-							return
-						}
-					} else {
-						if _, err = dbConn.Exec(context.Background(),
-							`INSERT INTO "string_transactions" ("timestamp", "transaction_type", "key_id", "value")
-						VALUES ($1, $2, $3, $4);`,
-							transact.Timestamp, apitypes.TransactionTypeName[int32(transact.TxnType)], *keyId, transact.Data,
-						); err != nil {
-							errorChan <- fmt.Errorf("Failed to write string transaction %v", err)
-							return
-						}
-					}
-
-				case apitypes.StorageMap:
-					// Deletion from map table is a bit involved
-					if keyId, err = l.insertTransactionKey(dbConn, transact, "map_keys"); err != nil {
-						errorChan <- err
-						return
-					}
-					rows, _ := dbConn.Query(context.Background(),
-						`INSERT INTO "map_transactions" ("timestamp", "transaction_type", "key_id") VALUES ($1, $2, $3) RETURNING "id";`,
-						transact.Timestamp, apitypes.TransactionTypeName[int32(transact.TxnType)], *keyId,
-					)
-					transactId, err := pgx.CollectOneRow(rows, pgx.RowTo[int32])
-					if err != nil {
-						errorChan <- fmt.Errorf("Failed to query map transaction id %v", err)
-						return
-					}
-					if transact.Data != nil {
-						batch := &pgx.Batch{}
-						for key, value := range transact.Data.(map[string]string) {
-							batch.Queue(
-								`INSERT INTO "map_key_value_pairs" ("transaction_id", "map_key_id", "key", "value") 
-								VALUES ($1, $2, $3, $4);`,
-								transactId, *keyId, key, value)
-						}
-						err = dbConn.SendBatch(context.Background(), batch).Close()
-						if err != nil {
-							errorChan <- fmt.Errorf("Failed to insert into map key value pairs table %v", err)
-							return
-						}
-					}
+				err := l.insertTransaction(dbConn, transact)
+				if err != nil {
+					errorChan <- err
+					return
 				}
 			}
 		}
