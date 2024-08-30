@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"crypto"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/base64"
+	_ "encoding/base64"
+	"encoding/pem"
 	"flag"
 	"fmt"
 	"os"
@@ -23,34 +25,70 @@ import (
 	_ "github.com/google/uuid"
 )
 
-// NOTE: Experimental basic authentication
-
-const authHeaderPrefix = "Bearer "
+// TODO: Try out ED25519 instead of RSA for generating private/public key pairs.
+// The generated keys are usually smaller and more secure.
+// openssl genpkey -algorithm ED25519 ...
 
 type JWTClaims struct {
+	// We use username and password, but it could be anything,
+	// for example a project name, namespace etc.
 	Username string `json:"username,omitempty"`
 	Password string `json:"password,omitempty"`
 
 	jwt.RegisteredClaims
 }
 
-type basicAuth struct {
-	username string
-	password string
+type JWTAuthManager struct {
+	token string
 }
 
-func (b basicAuth) GetRequestMetadata(ctx context.Context, uri ...string) (map[string]string, error) {
-	log.Logger.Info("Encoding username and password using base64 algorithm")
+func (b JWTAuthManager) GetRequestMetadata(ctx context.Context, uri ...string) (map[string]string, error) {
+	log.Logger.Info("Requested metadata")
 
-	auth := b.username + ":" + b.password
-	enc := base64.StdEncoding.EncodeToString([]byte(auth))
 	return map[string]string{
-		"authorization": "Basic " + enc,
+		"authorization": "Bearer " + b.token,
 	}, nil
 }
 
-func (b basicAuth) RequireTransportSecurity() bool {
+func (b JWTAuthManager) RequireTransportSecurity() bool {
+	log.Logger.Info("Require transaport security was called")
+
 	return true
+}
+
+type JWTValidator struct {
+	key crypto.PublicKey
+}
+
+func NewTokenValidator(publicKeyPath string) (*JWTValidator, error) {
+	keyBytes, err := os.ReadFile(publicKeyPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read public key file %v", err)
+	}
+	pubKey, err := jwt.ParseRSAPublicKeyFromPEM(keyBytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse public key %v", err)
+	}
+
+	return &JWTValidator{key: pubKey}, nil
+}
+
+func (v *JWTValidator) GetToken(tokenString string) (*jwt.Token, error) {
+	// TODO: How do we check whether the claims are correct?
+	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+		// Figure out whether the token came from somebody we trust.
+		// check whether a token uses expected signing method.
+		if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {
+			return nil, fmt.Errorf("unexpected signing method")
+		}
+		return v.key, nil
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse token %v", err)
+	}
+
+	return token, nil
 }
 
 func main() {
@@ -63,7 +101,7 @@ func main() {
 	clientPrivateKeyFile := flag.String("private_key", "", "File containing cient private RSA key")
 	clientPublicKeyFile := flag.String("public_key", "", "File containing client public X509 key")
 	caPublicKeyFile := flag.String("ca_public_key", "", "Public key of a CA used to sign all public certificates")
-	jwtSigningKey := flag.String("jwt_signing_key", "", "Private key to sign JWT token")
+	jwtPrivateKey := flag.String("jwt_private_key", "", "Private key to sign JWT token")
 
 	flag.Parse()
 
@@ -74,7 +112,6 @@ func main() {
 	cert, err := tls.LoadX509KeyPair(*clientPublicKeyFile, *clientPrivateKeyFile)
 	if err != nil {
 		log.Logger.Fatal("Failed to load public/private keys pair %v", err)
-		os.Exit(1)
 	}
 
 	// Create certificate pool from the CA
@@ -82,12 +119,10 @@ func main() {
 	ca, err := os.ReadFile(*caPublicKeyFile)
 	if err != nil {
 		log.Logger.Fatal("Failed to read ca certificate %v", err)
-		os.Exit(1)
 	}
 
 	if ok := certPool.AppendCertsFromPEM(ca); !ok {
 		log.Logger.Fatal("Failed to append ca certificate %v", err)
-		os.Exit(1)
 	}
 
 	///////////////////////////////////////////////////////////////////////////////
@@ -101,20 +136,62 @@ func main() {
 		},
 	}
 
-	_ = claims
-	_ = jwtSigningKey
-
-	log.Logger.Info("Claims: %v", claims)
-	///////////////////////////////////////////////////////////////////////////////
-	// NOTE: Just for testing basic authentication
-	auth := basicAuth{
-		username: "saml",
-		password: "saml",
+	// Parse jwt signing private key
+	jwtPrivateKeyContents, err := os.ReadFile(*jwtPrivateKey)
+	if err != nil {
+		log.Logger.Fatal("Failed to read jwt private key file %v", err)
 	}
 
+	// NOTE: Instead of parsing manually, jwt could parse a private key for us.
+	privateKey, err := jwt.ParseRSAPrivateKeyFromPEM(jwtPrivateKeyContents)
+	if err != nil {
+		log.Logger.Fatal("Failed to parse private key %v", err)
+	}
+
+	_ = privateKey
+
+	var key crypto.PrivateKey
+	pemBlock, _ := pem.Decode([]byte(jwtPrivateKeyContents))
+	log.Logger.Info("Private key type: %s", pemBlock.Type)
+	if pemBlock.Type == "RSA PRIVATE KEY" { // encrypted key
+		key, err = x509.ParsePKCS1PrivateKey(pemBlock.Bytes)
+		if err != nil {
+			log.Logger.Fatal("Failed to parse encrypted jwt private key %s", err)
+		}
+	} else if pemBlock.Type == "PRIVATE KEY" { // unencrypted key
+		key, err = x509.ParsePKCS8PrivateKey(pemBlock.Bytes)
+		if err != nil {
+			log.Logger.Fatal("Failed to parse unencrypted jwt private key %v", err)
+		}
+	}
+
+	jwtToken := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	token, err := jwtToken.SignedString(key)
+	if err != nil {
+		log.Logger.Fatal("Failed to create signed jwt token %v", err)
+	}
+
+	jwtAuthManager := JWTAuthManager{
+		token: token,
+	}
+
+	///////////////////////////////////////////////////////////////////////////////
+	// Test jwt token validation
+	tokenValidator, err := NewTokenValidator("../../certs/jwt_public.pem")
+	if err != nil {
+		log.Logger.Fatal("Failed to create token validator %v", err)
+	}
+
+	validToken, err := tokenValidator.GetToken(token)
+	if err != nil {
+		log.Logger.Fatal("Unable to get validated token %v", err)
+	}
+	_ = validToken
+
+	///////////////////////////////////////////////////////////////////////////////
 	options := []grpc.DialOption{
 		// authenticate on each grpc call,
-		grpc.WithPerRPCCredentials(auth),
+		grpc.WithPerRPCCredentials(jwtAuthManager),
 		grpc.WithTransportCredentials(
 			credentials.NewTLS(&tls.Config{
 				// NOTE: Server name should be equal to Common Name on the certificate
@@ -130,7 +207,6 @@ func main() {
 	grpcClient, err := grpc.NewClient(txnServiceAddr, options...)
 	if err != nil {
 		log.Logger.Fatal("Failed to create grpc client %v", err)
-		os.Exit(1)
 	}
 	// NOTE: Should we defer closing the connection?
 	defer grpcClient.Close()

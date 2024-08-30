@@ -2,16 +2,18 @@ package main
 
 import (
 	"context"
+	"crypto"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
 	"flag"
+	"fmt"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
 
-	_ "github.com/golang-jwt/jwt/v5"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/isnastish/kvs/pkg/api"
 	"github.com/isnastish/kvs/pkg/log"
 	"github.com/isnastish/kvs/pkg/txn_service"
@@ -22,6 +24,40 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
+
+type JWTValidator struct {
+	key crypto.PublicKey
+}
+
+func NewValidator(publicKeyPath string) (*JWTValidator, error) {
+	keyBytes, err := os.ReadFile(publicKeyPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read public key file %v", err)
+	}
+	pubKey, err := jwt.ParseRSAPublicKeyFromPEM(keyBytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse public key %v", err)
+	}
+
+	return &JWTValidator{key: pubKey}, nil
+}
+
+func (v *JWTValidator) GetToken(tokenString string) (*jwt.Token, error) {
+	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+		// Figure out whether the token came from somebody we trust.
+		// check whether a token uses expected signing method.
+		if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {
+			return nil, fmt.Errorf("unexpected signing method")
+		}
+		return v.key, nil
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse token %v", err)
+	}
+
+	return token, nil
+}
 
 func validateBasicCredentials(incomingCtx context.Context) error {
 	md, ok := metadata.FromIncomingContext(incomingCtx)
@@ -47,12 +83,11 @@ func readTransactionsStremInterceptor(srv interface{}, ss grpc.ServerStream,
 	info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 
 	log.Logger.Info("Invoked server streaming interceptor")
-
-	if err := validateBasicCredentials(ss.Context()); err != nil {
-		log.Logger.Error("Authorization failed %v", err)
-		return err
-	}
-
+	//	if err := validateBasicCredentials(ss.Context()); err != nil {
+	//		log.Logger.Error("Authorization failed %v", err)
+	//		return err
+	//	}
+	//
 	log.Logger.Info("Authorization succeeded")
 
 	err := handler(srv, ss)
@@ -60,7 +95,7 @@ func readTransactionsStremInterceptor(srv interface{}, ss grpc.ServerStream,
 		log.Logger.Info("Failed to invoke streaming RPC with error %v", err)
 	}
 
-	return err
+	return nil
 }
 
 func main() {
@@ -71,6 +106,7 @@ func main() {
 	serverPrivateKeyFile := flag.String("private_key", "", "Server private RSA key")
 	serverPublicKeyFile := flag.String("public_key", "", "Server public X509 key")
 	caPublicKeyFile := flag.String("ca_public_key", "", "Public kye of a CA used to sign all public certificates")
+	allowUnauthorized := flag.Bool("allow_unauthorized", false, "Disable authorization")
 
 	flag.Parse()
 
@@ -129,7 +165,7 @@ func main() {
 		),
 	}
 
-	transactionService := txn_service.NewTransactionService(transactLogger)
+	transactionService := txn_service.NewTransactionService(transactLogger, *allowUnauthorized)
 
 	// pass TLS credentials to create  secure grpc server
 	grpcServer := api.NewGRPCServer(options, api.NewTransactionServer(transactionService))
