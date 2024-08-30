@@ -42,39 +42,46 @@ func NewTokenValidator(publicKeyPath string) (*JWTValidator, error) {
 	return &JWTValidator{key: pubKey}, nil
 }
 
-func (v *JWTValidator) GetToken(tokenString string) (*jwt.Token, error) {
-	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+func (v *JWTValidator) ValidateToken(tokenString string) error {
+	_, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
 		// Figure out whether the token came from somebody we trust.
 		// check whether a token uses expected signing method.
 		if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {
 			return nil, fmt.Errorf("unexpected signing method")
 		}
+
+		// Return a single possible key we trust.
 		return v.key, nil
 	})
 
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse token %v", err)
+		return fmt.Errorf("failed to parse token %v", err)
 	}
 
-	return token, nil
+	return nil
 }
 
 func readTransactionsStremInterceptor(srv interface{}, ss grpc.ServerStream,
 	info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 
+	log.Logger.Info("Stream interceptor was invoked")
+
 	// NOTE: We should be able to use fmt.Errorf instead of status package,
 	// What would be the difference?
 	metadata, ok := metadata.FromIncomingContext(ss.Context())
 	if !ok {
+		log.Logger.Error("Empty metadata")
 		return status.Errorf(codes.InvalidArgument, "missing credentials metadata")
 	}
 
 	auth, ok := metadata["authorization"]
 	if !ok {
+		log.Logger.Error("Authorization header is not found")
 		return status.Errorf(codes.InvalidArgument, "missing authorization header")
 	}
 
 	if len(auth) == 0 {
+		log.Logger.Error("Authorization header is empty")
 		return status.Errorf(codes.InvalidArgument, "authorization header is empty")
 	}
 
@@ -82,21 +89,22 @@ func readTransactionsStremInterceptor(srv interface{}, ss grpc.ServerStream,
 	// but instead we should do it only once.
 	tokenValidator, err := NewTokenValidator("../../certs/jwt_public.pem")
 	if err != nil {
+		log.Logger.Error("Failed to create token validator %v", err)
 		return status.Errorf(codes.Unauthenticated, fmt.Sprintf("failed to create token validator %v", err))
 	}
 
 	tokenString, found := strings.CutPrefix(auth[0], authBearerPrefix)
 	if !found {
+		log.Logger.Error("Bearer prefix is not found")
 		return status.Errorf(codes.Unauthenticated, "malformed token string")
 	}
 
-	// NOTE: We don't need the token, instead we could rename GetToken to ValidateToken
-	token, err := tokenValidator.GetToken(tokenString)
+	// NOTE: We don't need the token, instead we could rename ValidateToken to ValidateToken
+	err = tokenValidator.ValidateToken(tokenString)
 	if err != nil {
+		log.Logger.Error("Failed to validate token %v", err)
 		return status.Errorf(codes.Unauthenticated, fmt.Sprintf("failed to validate token %v", err))
 	}
-
-	_ = token
 
 	err = handler(srv, ss)
 	if err != nil {

@@ -177,19 +177,19 @@ func main() {
 
 	///////////////////////////////////////////////////////////////////////////////
 	// Test jwt token validation
-	tokenValidator, err := NewTokenValidator("../../certs/jwt_public.pem")
-	if err != nil {
-		log.Logger.Fatal("Failed to create token validator %v", err)
-	}
-
-	validToken, err := tokenValidator.GetToken(token)
-	if err != nil {
-		log.Logger.Fatal("Unable to get validated token %v", err)
-	}
-
-	log.Logger.Info("Token header: %v", validToken.Header)
-	log.Logger.Info("Token claims: %v", validToken.Claims)
-
+	//	tokenValidator, err := NewTokenValidator("../../certs/jwt_public.pem")
+	//	if err != nil {
+	//		log.Logger.Fatal("Failed to create token validator %v", err)
+	//	}
+	//
+	//	validToken, err := tokenValidator.GetToken(token)
+	//	if err != nil {
+	//		log.Logger.Fatal("Unable to get validated token %v", err)
+	//	}
+	//
+	//	log.Logger.Info("Token header: %v", validToken.Header)
+	//	log.Logger.Info("Token claims: %v", validToken.Claims)
+	//
 	///////////////////////////////////////////////////////////////////////////////
 	options := []grpc.DialOption{
 		grpc.WithPerRPCCredentials(jwtAuthManager),
