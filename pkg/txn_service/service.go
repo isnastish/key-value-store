@@ -36,16 +36,15 @@ type PostgresTransactionLogger struct {
 	cancelFunc   context.CancelFunc
 }
 
-type ServiceSettings struct {
-}
-
 type TransactionService struct {
 	TransactionLogger
+	AllowUnauthorized bool
 }
 
-func NewTransactionService(logger TransactionLogger) *TransactionService {
+func NewTransactionService(logger TransactionLogger, allowUnauthorized bool) *TransactionService {
 	return &TransactionService{
 		TransactionLogger: logger,
+		AllowUnauthorized: allowUnauthorized,
 	}
 }
 

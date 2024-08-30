@@ -24,6 +24,13 @@ openssl req -newkey rsa:2048 -nodes -keyout certs/client.key -subj "/CN=localhos
 # Create client certificate
 openssl x509 -req -extfile <(printf "subjectAltName=DNS:localhost") -days ${VALIDITY_DAYS} -in certs/client.csr -CA certs/ca.crt -CAkey certs/ca.key -CAcreateserial -out certs/client.crt
 
+# Generate private key for signing JWT tokens
+openssl genrsa -out certs/jwt_private.pem 4096 
+
+# Extract a public key out of generate private key
+openssl rsa -in certs/jwt_private.pem -pubout -out certs/jwt_public.pem 
+
 # Remove signing request certificates
 rm certs/server.csr
 rm certs/client.csr
+rm certs/ca.srl

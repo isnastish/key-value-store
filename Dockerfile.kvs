@@ -18,8 +18,11 @@ ADD ./certs/* /certs/
 
 EXPOSE 8080/tcp
 
+# TODO: flag package allows us to pass flags in a form of --private_key="../certs/client.key"
+# But for some reason it doesn't work when passed with docker.
 CMD [ "/kvs/kvs", \
-    "-private_key_file", "../certs/client.key", \
-    "-public_key_file", "../certs/client.crt", \
-    "-ca_public_key_file", "../certs/ca.crt" \
+    "-private_key", "../certs/client.key", \
+    "-public_key", "../certs/client.crt", \
+    "-ca_public_key", "../certs/ca.crt", \
+    "-jwt_private_key", "../certs/jwt_private.pem" \
 ]

@@ -1,19 +1,21 @@
 package main
 
 import (
-	"context"
+	"crypto"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/base64"
 	"flag"
+	"fmt"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/isnastish/kvs/pkg/api"
 	"github.com/isnastish/kvs/pkg/log"
 	"github.com/isnastish/kvs/pkg/txn_service"
+
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -21,44 +23,97 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-func validateBasicCredentials(incomingCtx context.Context) error {
-	md, ok := metadata.FromIncomingContext(incomingCtx)
-	if !ok {
-		return status.Errorf(codes.InvalidArgument, "missing credentials metadata")
-	}
+const authBearerPrefix = "Bearer "
 
-	if auth, ok := md["authorization"]; ok {
-		if len(auth) > 0 {
-			token := strings.TrimPrefix(auth[0], "Basic ")
-			if token == base64.StdEncoding.EncodeToString([]byte("saml:saml")) {
-				return nil
-			}
-		}
-	}
-
-	return status.Errorf(codes.Unauthenticated, "invalid credentials token")
+type JWTValidator struct {
+	key crypto.PublicKey
 }
 
-// //////////////////////////////////////////////////////////////////
-// Server-side stream interceptor
+func NewTokenValidator(publicKeyPath string) (*JWTValidator, error) {
+	keyBytes, err := os.ReadFile(publicKeyPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read public key file %v", err)
+	}
+	pubKey, err := jwt.ParseRSAPublicKeyFromPEM(keyBytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse public key %v", err)
+	}
+
+	return &JWTValidator{key: pubKey}, nil
+}
+
+func (v *JWTValidator) ValidateToken(tokenString string) error {
+	_, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+		// Figure out whether the token came from somebody we trust.
+		// check whether a token uses expected signing method.
+		if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {
+			return nil, fmt.Errorf("unexpected signing method")
+		}
+
+		// Return a single possible key we trust.
+		return v.key, nil
+	})
+
+	if err != nil {
+		return fmt.Errorf("failed to parse token %v", err)
+	}
+
+	return nil
+}
+
 func readTransactionsStremInterceptor(srv interface{}, ss grpc.ServerStream,
 	info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 
-	log.Logger.Info("Invoked server streaming interceptor")
+	log.Logger.Info("Stream interceptor was invoked")
 
-	if err := validateBasicCredentials(ss.Context()); err != nil {
-		log.Logger.Error("Authorization failed %v", err)
-		return err
+	// NOTE: We should be able to use fmt.Errorf instead of status package,
+	// What would be the difference?
+	metadata, ok := metadata.FromIncomingContext(ss.Context())
+	if !ok {
+		log.Logger.Error("Empty metadata")
+		return status.Errorf(codes.InvalidArgument, "missing credentials metadata")
 	}
 
-	log.Logger.Info("Authorization succeeded")
+	auth, ok := metadata["authorization"]
+	if !ok {
+		log.Logger.Error("Authorization header is not found")
+		return status.Errorf(codes.InvalidArgument, "missing authorization header")
+	}
 
-	err := handler(srv, ss)
+	if len(auth) == 0 {
+		log.Logger.Error("Authorization header is empty")
+		return status.Errorf(codes.InvalidArgument, "authorization header is empty")
+	}
+
+	// NOTE: The problem here is that we parse the file which contains a public key every time an RPC is invoked,
+	// but instead we should do it only once.
+	tokenValidator, err := NewTokenValidator("../../certs/jwt_public.pem")
+	if err != nil {
+		log.Logger.Error("Failed to create token validator %v", err)
+		return status.Errorf(codes.Unauthenticated, fmt.Sprintf("failed to create token validator %v", err))
+	}
+
+	tokenString, found := strings.CutPrefix(auth[0], authBearerPrefix)
+	if !found {
+		log.Logger.Error("Bearer prefix is not found")
+		return status.Errorf(codes.Unauthenticated, "malformed token string")
+	}
+
+	// NOTE: We don't need the token, instead we could rename ValidateToken to ValidateToken
+	err = tokenValidator.ValidateToken(tokenString)
+	if err != nil {
+		log.Logger.Error("Failed to validate token %v", err)
+		return status.Errorf(codes.Unauthenticated, fmt.Sprintf("failed to validate token %v", err))
+	}
+
+	log.Logger.Info("Authorized")
+
+	err = handler(srv, ss)
 	if err != nil {
 		log.Logger.Info("Failed to invoke streaming RPC with error %v", err)
 	}
 
-	return err
+	return nil
 }
 
 func main() {
@@ -66,9 +121,10 @@ func main() {
 	logLevel := flag.String("log_level", "info", "Log level")
 	grpcPort := flag.Uint("grpc_port", 5051, "GRPC listening port")
 	loggerBackend := flag.String("backend", "postgres", "Backend for logging transactions [file|postgres]")
-	serverPrivateKeyFile := flag.String("private_key_file", "", "Server private RSA key")
-	serverPublicKeyFile := flag.String("public_key_file", "", "Server public X509 key")
-	caPublicKeyFile := flag.String("ca_public_key_file", "", "Public kye of a CA used to sign all public certificates")
+	serverPrivateKeyFile := flag.String("private_key", "", "Server private RSA key")
+	serverPublicKeyFile := flag.String("public_key", "", "Server public X509 key")
+	caPublicKeyFile := flag.String("ca_public_key", "", "Public kye of a CA used to sign all public certificates")
+	allowUnauthorized := flag.Bool("allow_unauthorized", false, "Disable authorization")
 
 	flag.Parse()
 
@@ -127,7 +183,7 @@ func main() {
 		),
 	}
 
-	transactionService := txn_service.NewTransactionService(transactLogger)
+	transactionService := txn_service.NewTransactionService(transactLogger, *allowUnauthorized)
 
 	// pass TLS credentials to create  secure grpc server
 	grpcServer := api.NewGRPCServer(options, api.NewTransactionServer(transactionService))
