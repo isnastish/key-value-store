@@ -61,6 +61,3 @@ CREATE TABLE IF NOT EXISTS "map_key_value_pairs" (
 ```
 
 > **NOTE** An important consideration was made. If `delete` transaction is received, all transactions prior to this one would be deleted. That way we prevent our tables from growing continuously slowing down our queries as the tables grow in size.
-
-## Architecure
-Applicationt's architecutre simplified diagram: [Key-value storage data workflow](https://miro.com/app/board/uXjVKnk4Jz8=/)

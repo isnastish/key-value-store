@@ -17,14 +17,15 @@ type GrpcService interface {
 	ServiceDesc() *grpc.ServiceDesc
 }
 
-func NewGRPCServer(service GrpcService, opt ...grpc.ServerOption) *GRPCServer {
+func NewGRPCServer(opt []grpc.ServerOption, services ...GrpcService) *GRPCServer {
 	server := &GRPCServer{
 		server: grpc.NewServer(opt...),
 	}
 
-	// Could be put into a for loop for multiple services
-	desc := service.ServiceDesc()
-	server.server.RegisterService(desc, service)
+	for _, service := range services {
+		desc := service.ServiceDesc()
+		server.server.RegisterService(desc, service)
+	}
 
 	return server
 }

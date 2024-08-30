@@ -17,7 +17,7 @@ import (
 
 	"github.com/isnastish/kvs/pkg/apitypes"
 	"github.com/isnastish/kvs/pkg/log"
-	"github.com/isnastish/kvs/pkg/serviceinfo"
+	info "github.com/isnastish/kvs/pkg/serviceinfo"
 	"github.com/isnastish/kvs/proto/api"
 )
 
