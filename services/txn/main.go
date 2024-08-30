@@ -11,7 +11,7 @@ import (
 	"strings"
 	"syscall"
 
-	myapi "github.com/isnastish/kvs/pkg/api"
+	"github.com/isnastish/kvs/pkg/api"
 	"github.com/isnastish/kvs/pkg/log"
 	"github.com/isnastish/kvs/pkg/txn_service"
 	"google.golang.org/grpc"
@@ -62,7 +62,6 @@ func readTransactionsStremInterceptor(srv interface{}, ss grpc.ServerStream,
 }
 
 func main() {
-	// get from even variable?
 	postgresUrl := flag.String("postgres_endpoint", "", "Postgres database URL")
 	logLevel := flag.String("log_level", "info", "Log level")
 	grpcPort := flag.Uint("grpc_port", 5051, "GRPC listening port")
@@ -124,8 +123,6 @@ func main() {
 				// root certificate authorities that servers use
 				// to verify a client certificate by the policy in ClientAuth
 				ClientCAs: certPool,
-				// Is it to harsh using the tls version 1.3?
-				MinVersion: tls.VersionTLS13,
 			}),
 		),
 	}
@@ -133,7 +130,7 @@ func main() {
 	transactionService := txn_service.NewTransactionService(transactLogger)
 
 	// pass TLS credentials to create  secure grpc server
-	grpcServer := myapi.NewGRPCServer(options, myapi.NewTransactionServer(transactionService))
+	grpcServer := api.NewGRPCServer(options, api.NewTransactionServer(transactionService))
 
 	doneChan := make(chan bool, 1)
 	osSigChan := make(chan os.Signal, 1)
@@ -145,7 +142,7 @@ func main() {
 		if err != nil {
 			log.Logger.Fatal("Service terminated abnormally %v", err)
 		} else {
-			log.Logger.Info("Service closed gracefully")
+			log.Logger.Info("Service shutdown gracefully")
 		}
 	}()
 
