@@ -1,7 +1,6 @@
 package main
 
 import (
-	"crypto"
 	"crypto/tls"
 	"crypto/x509"
 	"flag"
@@ -11,8 +10,8 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/isnastish/kvs/pkg/api"
+	jwtauth "github.com/isnastish/kvs/pkg/jwt_auth"
 	"github.com/isnastish/kvs/pkg/log"
 	"github.com/isnastish/kvs/pkg/txn_service"
 
@@ -22,44 +21,6 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
-
-const authBearerPrefix = "Bearer "
-
-type JWTValidator struct {
-	key crypto.PublicKey
-}
-
-func NewTokenValidator(publicKeyPath string) (*JWTValidator, error) {
-	keyBytes, err := os.ReadFile(publicKeyPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read public key file %v", err)
-	}
-	pubKey, err := jwt.ParseRSAPublicKeyFromPEM(keyBytes)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse public key %v", err)
-	}
-
-	return &JWTValidator{key: pubKey}, nil
-}
-
-func (v *JWTValidator) ValidateToken(tokenString string) error {
-	_, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
-		// Figure out whether the token came from somebody we trust.
-		// check whether a token uses expected signing method.
-		if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {
-			return nil, fmt.Errorf("unexpected signing method")
-		}
-
-		// Return a single possible key we trust.
-		return v.key, nil
-	})
-
-	if err != nil {
-		return fmt.Errorf("failed to parse token %v", err)
-	}
-
-	return nil
-}
 
 func readTransactionsStremInterceptor(srv interface{}, ss grpc.ServerStream,
 	info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
@@ -87,13 +48,13 @@ func readTransactionsStremInterceptor(srv interface{}, ss grpc.ServerStream,
 
 	// NOTE: The problem here is that we parse the file which contains a public key every time an RPC is invoked,
 	// but instead we should do it only once.
-	tokenValidator, err := NewTokenValidator("../../certs/jwt_public.pem")
+	tokenValidator, err := jwtauth.NewTokenValidator("../../certs/jwt_public.pem")
 	if err != nil {
 		log.Logger.Error("Failed to create token validator %v", err)
 		return status.Errorf(codes.Unauthenticated, fmt.Sprintf("failed to create token validator %v", err))
 	}
 
-	tokenString, found := strings.CutPrefix(auth[0], authBearerPrefix)
+	tokenString, found := strings.CutPrefix(auth[0], jwtauth.AuthBearerPrefix)
 	if !found {
 		log.Logger.Error("Bearer prefix is not found")
 		return status.Errorf(codes.Unauthenticated, "malformed token string")
