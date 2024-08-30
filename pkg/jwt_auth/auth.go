@@ -3,10 +3,15 @@ package jwtauth
 import (
 	"context"
 	"crypto"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+
+	"github.com/isnastish/kvs/pkg/log"
 )
 
 // TODO: Try out ED25519 instead of RSA for generating private/public key pairs.
@@ -62,6 +67,52 @@ type JWTClaims struct {
 
 type JWTAuthManager struct {
 	Token string
+}
+
+func NewJWTAuthManager(privateKeyPath string) (*JWTAuthManager, error) {
+	jwtPrivateKeyContents, err := os.ReadFile(privateKeyPath)
+	if err != nil {
+		log.Logger.Fatal("Failed to read jwt private key file %v", err)
+	}
+
+	claims := JWTClaims{
+		// NOTE: These should come from environment variables
+		Username: "saml",
+		Password: "saml",
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)), // expires in 24h
+		},
+	}
+
+	// NOTE: Instead of parsing manually, jwt could parse a private key for us.
+	//	privateKey, err := jwt.ParseRSAPrivateKeyFromPEM(jwtPrivateKeyContents)
+	//	if err != nil {
+	//		log.Logger.Fatal("Failed to parse private key %v", err)
+	//	}
+	//
+
+	var key crypto.PrivateKey
+	pemBlock, _ := pem.Decode([]byte(jwtPrivateKeyContents))
+	log.Logger.Info("Private key type: %s", pemBlock.Type)
+	if pemBlock.Type == "RSA PRIVATE KEY" { // encrypted key
+		key, err = x509.ParsePKCS1PrivateKey(pemBlock.Bytes)
+		if err != nil {
+			log.Logger.Fatal("Failed to parse encrypted jwt private key %s", err)
+		}
+	} else if pemBlock.Type == "PRIVATE KEY" { // unencrypted key
+		key, err = x509.ParsePKCS8PrivateKey(pemBlock.Bytes)
+		if err != nil {
+			log.Logger.Fatal("Failed to parse unencrypted jwt private key %v", err)
+		}
+	}
+
+	jwtToken := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	token, err := jwtToken.SignedString(key)
+	if err != nil {
+		log.Logger.Fatal("Failed to create signed jwt token %v", err)
+	}
+
+	return &JWTAuthManager{Token: token}, nil
 }
 
 func (b JWTAuthManager) GetRequestMetadata(ctx context.Context, uri ...string) (map[string]string, error) {

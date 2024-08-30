@@ -1,17 +1,14 @@
 package main
 
 import (
-	"crypto"
 	"crypto/tls"
 	"crypto/x509"
 	_ "encoding/base64"
-	"encoding/pem"
 	"flag"
 	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	jwtauth "github.com/isnastish/kvs/pkg/jwt_auth"
 	"github.com/isnastish/kvs/pkg/kvs"
@@ -20,8 +17,6 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
-
-	"github.com/golang-jwt/jwt/v5"
 )
 
 func main() {
@@ -59,70 +54,11 @@ func main() {
 	}
 
 	///////////////////////////////////////////////////////////////////////////////
-	// JWT authentication
-	claims := jwtauth.JWTClaims{
-		// NOTE: These should come from environment variables
-		Username: "saml",
-		Password: "saml",
-		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)), // expires in 24h
-		},
-	}
-
-	// Parse jwt signing private key
-	jwtPrivateKeyContents, err := os.ReadFile(*jwtPrivateKey)
+	jwtAuthManager, err := jwtauth.NewJWTAuthManager(*jwtPrivateKey)
 	if err != nil {
-		log.Logger.Fatal("Failed to read jwt private key file %v", err)
+		log.Logger.Fatal("Failed to create jwt authentication manager %v", err)
 	}
 
-	// NOTE: Instead of parsing manually, jwt could parse a private key for us.
-	//	privateKey, err := jwt.ParseRSAPrivateKeyFromPEM(jwtPrivateKeyContents)
-	//	if err != nil {
-	//		log.Logger.Fatal("Failed to parse private key %v", err)
-	//	}
-	//
-
-	var key crypto.PrivateKey
-	pemBlock, _ := pem.Decode([]byte(jwtPrivateKeyContents))
-	log.Logger.Info("Private key type: %s", pemBlock.Type)
-	if pemBlock.Type == "RSA PRIVATE KEY" { // encrypted key
-		key, err = x509.ParsePKCS1PrivateKey(pemBlock.Bytes)
-		if err != nil {
-			log.Logger.Fatal("Failed to parse encrypted jwt private key %s", err)
-		}
-	} else if pemBlock.Type == "PRIVATE KEY" { // unencrypted key
-		key, err = x509.ParsePKCS8PrivateKey(pemBlock.Bytes)
-		if err != nil {
-			log.Logger.Fatal("Failed to parse unencrypted jwt private key %v", err)
-		}
-	}
-
-	jwtToken := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
-	token, err := jwtToken.SignedString(key)
-	if err != nil {
-		log.Logger.Fatal("Failed to create signed jwt token %v", err)
-	}
-
-	jwtAuthManager := jwtauth.JWTAuthManager{
-		Token: token,
-	}
-
-	///////////////////////////////////////////////////////////////////////////////
-	// Test jwt token validation
-	//	tokenValidator, err := NewTokenValidator("../../certs/jwt_public.pem")
-	//	if err != nil {
-	//		log.Logger.Fatal("Failed to create token validator %v", err)
-	//	}
-	//
-	//	validToken, err := tokenValidator.GetToken(token)
-	//	if err != nil {
-	//		log.Logger.Fatal("Unable to get validated token %v", err)
-	//	}
-	//
-	//	log.Logger.Info("Token header: %v", validToken.Header)
-	//	log.Logger.Info("Token claims: %v", validToken.Claims)
-	//
-	///////////////////////////////////////////////////////////////////////////////
 	options := []grpc.DialOption{
 		grpc.WithPerRPCCredentials(jwtAuthManager),
 		grpc.WithTransportCredentials(
