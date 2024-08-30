@@ -62,7 +62,6 @@ func readTransactionsStremInterceptor(srv interface{}, ss grpc.ServerStream,
 }
 
 func main() {
-	// get from even variable?
 	postgresUrl := flag.String("postgres_endpoint", "", "Postgres database URL")
 	logLevel := flag.String("log_level", "info", "Log level")
 	grpcPort := flag.Uint("grpc_port", 5051, "GRPC listening port")
