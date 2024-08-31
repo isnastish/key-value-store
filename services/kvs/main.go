@@ -64,7 +64,7 @@ func main() {
 		},
 	}
 
-	jwtAuthManager, err := jwtauth.NewJWTAuthManager(*jwtPrivateKey, &claims)
+	jwtAuthManager, err := jwtauth.NewAuthManagerFromFile(*jwtPrivateKey, &claims)
 	if err != nil {
 		log.Logger.Fatal("Failed to create jwt authentication manager %v", err)
 	}

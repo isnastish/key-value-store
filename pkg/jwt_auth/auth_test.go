@@ -10,13 +10,13 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-func TestValidTexisten(t *testing.T) {
+func TestValidToken(t *testing.T) {
 	var claims Claims
 	claims.Username = "saml"
 	claims.Password = "saml"
 	claims.ExpiresAt = jwt.NewNumericDate(time.Now().Add(24 * time.Hour))
 
-	jwtAuthManager, err := NewJWTAuthManager("../../certs/jwt_private.pem", &claims)
+	jwtAuthManager, err := NewAuthManagerFromFile("../../certs/jwt_private.pem", &claims)
 	if err != nil {
 		t.Fatalf("Failed to create auth manager %v", err)
 	}
@@ -32,20 +32,20 @@ func TestValidTexisten(t *testing.T) {
 	}
 }
 
-func TestExpiredTexisten(t *testing.T) {
+func TestExpiredToken(t *testing.T) {
 	var claims Claims
 	claims.Username = "saml"
 	claims.Password = "saml"
 	claims.ExpiresAt = jwt.NewNumericDate(time.Now().Add(3 * time.Second))
 
-	jwtAuthManager, err := NewJWTAuthManager("../../certs/jwt_private.pem", &claims)
+	jwtAuthManager, err := NewAuthManagerFromFile("../../certs/jwt_private.pem", &claims)
 	if err != nil {
 		t.Fatalf("Failed to create auth manager %v", err)
 	}
 
 	texistenValidator, err := NewTokenValidator("../../certs/jwt_public.pem")
 	if err != nil {
-		t.Fatalf("Failed to create texisten validator %v", err)
+		t.Fatalf("Failed to create token validator %v", err)
 	}
 
 	// wait for the texisten to expire
@@ -57,7 +57,7 @@ func TestExpiredTexisten(t *testing.T) {
 	}
 
 	if !strings.Contains(err.Error(), "texisten is expired") {
-		t.Errorf("Texisten expired expected, got %v", err)
+		t.Errorf("Token expired expected, got %v", err)
 	}
 }
 

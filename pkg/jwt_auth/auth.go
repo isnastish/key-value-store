@@ -68,41 +68,46 @@ type JWTAuthManager struct {
 	Token string
 }
 
-func NewJWTAuthManager(privateKeyPath string, claims *Claims) (*JWTAuthManager, error) {
-	jwtPrivateKeyContents, err := os.ReadFile(privateKeyPath)
-	if err != nil {
-		log.Logger.Fatal("Failed to read jwt private key file %v", err)
-	}
-
+func NewAuthManagerFromBytes(privateKeyBytes []byte, claims *Claims) (*JWTAuthManager, error) {
 	// NOTE: Instead of parsing manually, jwt could parse a private key for us.
 	//	privateKey, err := jwt.ParseRSAPrivateKeyFromPEM(jwtPrivateKeyContents)
 	//	if err != nil {
 	//		log.Logger.Fatal("Failed to parse private key %v", err)
 	//	}
-	//
 
 	var key crypto.PrivateKey
-	pemBlock, _ := pem.Decode(jwtPrivateKeyContents)
+	var err error
+
+	pemBlock, _ := pem.Decode(privateKeyBytes)
 	log.Logger.Info("Private key type: %s", pemBlock.Type)
 	if pemBlock.Type == "RSA PRIVATE KEY" { // encrypted key
 		key, err = x509.ParsePKCS1PrivateKey(pemBlock.Bytes)
 		if err != nil {
-			log.Logger.Fatal("Failed to parse encrypted jwt private key %s", err)
+			return nil, fmt.Errorf("failed to parse encrypted jwt private key %s", err)
 		}
 	} else if pemBlock.Type == "PRIVATE KEY" { // unencrypted key
 		key, err = x509.ParsePKCS8PrivateKey(pemBlock.Bytes)
 		if err != nil {
-			log.Logger.Fatal("Failed to parse unencrypted jwt private key %v", err)
+			return nil, fmt.Errorf("failed to parse unencrypted jwt private key %v", err)
 		}
 	}
 
 	jwtToken := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	token, err := jwtToken.SignedString(key)
 	if err != nil {
-		log.Logger.Fatal("Failed to create signed jwt token %v", err)
+		return nil, fmt.Errorf("failed to create signed jwt token %v", err)
 	}
 
 	return &JWTAuthManager{Token: token}, nil
+}
+
+func NewAuthManagerFromFile(privateKeyPath string, claims *Claims) (*JWTAuthManager, error) {
+	privateKeyBytes, err := os.ReadFile(privateKeyPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read private key file %v", err)
+	}
+
+	return NewAuthManagerFromBytes(privateKeyBytes, claims)
 }
 
 func (b JWTAuthManager) GetRequestMetadata(ctx context.Context, uri ...string) (map[string]string, error) {
