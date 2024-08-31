@@ -1,12 +1,9 @@
 package main
 
 import (
-	"context"
-	"crypto"
 	"crypto/tls"
 	"crypto/x509"
 	_ "encoding/base64"
-	"encoding/pem"
 	"flag"
 	"fmt"
 	"os"
@@ -14,47 +11,15 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
+	jwtauth "github.com/isnastish/kvs/pkg/jwt_auth"
 	"github.com/isnastish/kvs/pkg/kvs"
 	"github.com/isnastish/kvs/pkg/log"
 	"github.com/isnastish/kvs/proto/api"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
-
-	"github.com/golang-jwt/jwt/v5"
-	_ "github.com/google/uuid"
 )
-
-// TODO: Try out ED25519 instead of RSA for generating private/public key pairs.
-// The generated keys are usually smaller and more secure.
-// openssl genpkey -algorithm ED25519 ...
-
-type JWTClaims struct {
-	// We use username and password, but it could be anything,
-	// for example a project name, namespace etc.
-	Username string `json:"username,omitempty"`
-	Password string `json:"password,omitempty"`
-
-	jwt.RegisteredClaims
-}
-
-type JWTAuthManager struct {
-	token string
-}
-
-func (b JWTAuthManager) GetRequestMetadata(ctx context.Context, uri ...string) (map[string]string, error) {
-	log.Logger.Info("Requested metadata")
-
-	return map[string]string{
-		"authorization": "Bearer " + b.token,
-	}, nil
-}
-
-func (b JWTAuthManager) RequireTransportSecurity() bool {
-	log.Logger.Info("Require transaport security was called")
-
-	return true
-}
 
 func main() {
 	var settings kvs.ServiceSettings
@@ -91,70 +56,19 @@ func main() {
 	}
 
 	///////////////////////////////////////////////////////////////////////////////
-	// JWT authentication
-	claims := JWTClaims{
-		"saml",
-		"saml",
-
-		jwt.RegisteredClaims{
+	claims := jwtauth.Claims{
+		Username: "saml",
+		Password: "saml",
+		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)), // expires in 24h
 		},
 	}
 
-	// Parse jwt signing private key
-	jwtPrivateKeyContents, err := os.ReadFile(*jwtPrivateKey)
+	jwtAuthManager, err := jwtauth.NewJWTAuthManager(*jwtPrivateKey, &claims)
 	if err != nil {
-		log.Logger.Fatal("Failed to read jwt private key file %v", err)
+		log.Logger.Fatal("Failed to create jwt authentication manager %v", err)
 	}
 
-	// NOTE: Instead of parsing manually, jwt could parse a private key for us.
-	//	privateKey, err := jwt.ParseRSAPrivateKeyFromPEM(jwtPrivateKeyContents)
-	//	if err != nil {
-	//		log.Logger.Fatal("Failed to parse private key %v", err)
-	//	}
-	//
-
-	var key crypto.PrivateKey
-	pemBlock, _ := pem.Decode([]byte(jwtPrivateKeyContents))
-	log.Logger.Info("Private key type: %s", pemBlock.Type)
-	if pemBlock.Type == "RSA PRIVATE KEY" { // encrypted key
-		key, err = x509.ParsePKCS1PrivateKey(pemBlock.Bytes)
-		if err != nil {
-			log.Logger.Fatal("Failed to parse encrypted jwt private key %s", err)
-		}
-	} else if pemBlock.Type == "PRIVATE KEY" { // unencrypted key
-		key, err = x509.ParsePKCS8PrivateKey(pemBlock.Bytes)
-		if err != nil {
-			log.Logger.Fatal("Failed to parse unencrypted jwt private key %v", err)
-		}
-	}
-
-	jwtToken := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
-	token, err := jwtToken.SignedString(key)
-	if err != nil {
-		log.Logger.Fatal("Failed to create signed jwt token %v", err)
-	}
-
-	jwtAuthManager := JWTAuthManager{
-		token: token,
-	}
-
-	///////////////////////////////////////////////////////////////////////////////
-	// Test jwt token validation
-	//	tokenValidator, err := NewTokenValidator("../../certs/jwt_public.pem")
-	//	if err != nil {
-	//		log.Logger.Fatal("Failed to create token validator %v", err)
-	//	}
-	//
-	//	validToken, err := tokenValidator.GetToken(token)
-	//	if err != nil {
-	//		log.Logger.Fatal("Unable to get validated token %v", err)
-	//	}
-	//
-	//	log.Logger.Info("Token header: %v", validToken.Header)
-	//	log.Logger.Info("Token claims: %v", validToken.Claims)
-	//
-	///////////////////////////////////////////////////////////////////////////////
 	options := []grpc.DialOption{
 		grpc.WithPerRPCCredentials(jwtAuthManager),
 		grpc.WithTransportCredentials(
