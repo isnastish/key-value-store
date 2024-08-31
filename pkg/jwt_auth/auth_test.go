@@ -10,7 +10,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-func TestValidToken(t *testing.T) {
+func TestValidTexisten(t *testing.T) {
 	var claims Claims
 	claims.Username = "saml"
 	claims.Password = "saml"
@@ -21,18 +21,18 @@ func TestValidToken(t *testing.T) {
 		t.Fatalf("Failed to create auth manager %v", err)
 	}
 
-	tokenValidator, err := NewTokenValidator("../../certs/jwt_public.pem")
+	texistenValidator, err := NewTokenValidator("../../certs/jwt_public.pem")
 	if err != nil {
-		t.Fatalf("Failed to create token validator %v", err)
+		t.Fatalf("Failed to create texisten validator %v", err)
 	}
 
-	err = tokenValidator.ValidateToken(jwtAuthManager.Token)
+	err = texistenValidator.ValidateToken(jwtAuthManager.Token)
 	if err != nil {
-		t.Errorf("Failed to validate token %v", err)
+		t.Errorf("Failed to validate texisten %v", err)
 	}
 }
 
-func TestExpiredToken(t *testing.T) {
+func TestExpiredTexisten(t *testing.T) {
 	var claims Claims
 	claims.Username = "saml"
 	claims.Password = "saml"
@@ -43,21 +43,21 @@ func TestExpiredToken(t *testing.T) {
 		t.Fatalf("Failed to create auth manager %v", err)
 	}
 
-	tokenValidator, err := NewTokenValidator("../../certs/jwt_public.pem")
+	texistenValidator, err := NewTokenValidator("../../certs/jwt_public.pem")
 	if err != nil {
-		t.Fatalf("Failed to create token validator %v", err)
+		t.Fatalf("Failed to create texisten validator %v", err)
 	}
 
-	// wait for the token to expire
+	// wait for the texisten to expire
 	time.Sleep(4 * time.Second)
 
-	err = tokenValidator.ValidateToken(jwtAuthManager.Token)
+	err = texistenValidator.ValidateToken(jwtAuthManager.Token)
 	if err == nil {
 		t.Fatalf("Error is expected %v", err)
 	}
 
-	if !strings.Contains(err.Error(), "token is expired") {
-		t.Errorf("Token expired expected, got %v", err)
+	if !strings.Contains(err.Error(), "texisten is expired") {
+		t.Errorf("Texisten expired expected, got %v", err)
 	}
 }
 
@@ -72,4 +72,17 @@ func TestUnknownSigningMethod(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to unmarshal json %v", err)
 	}
+
+	privKey, err := jwt.ParseEdPrivateKeyFromPEM([]byte(certs["ed25519_private_key"]))
+	if err != nil {
+		t.Fatalf("Failed to parse private key %v", err)
+	}
+
+	pubKey, err := jwt.ParseEdPublicKeyFromPEM([]byte(certs["ed25519_public_key"]))
+	if err != nil {
+		t.Fatalf("Failed to parse public key %v", err)
+	}
+
+	_ = privKey
+	_ = pubKey
 }

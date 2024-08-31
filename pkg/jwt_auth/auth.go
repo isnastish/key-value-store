@@ -82,7 +82,7 @@ func NewJWTAuthManager(privateKeyPath string, claims *Claims) (*JWTAuthManager, 
 	//
 
 	var key crypto.PrivateKey
-	pemBlock, _ := pem.Decode([]byte(jwtPrivateKeyContents))
+	pemBlock, _ := pem.Decode(jwtPrivateKeyContents)
 	log.Logger.Info("Private key type: %s", pemBlock.Type)
 	if pemBlock.Type == "RSA PRIVATE KEY" { // encrypted key
 		key, err = x509.ParsePKCS1PrivateKey(pemBlock.Bytes)
