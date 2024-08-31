@@ -88,11 +88,23 @@ func TestUnknownSigningMethod(t *testing.T) {
 		t.Fatalf("Failed to parse private key %v", err)
 	}
 
-	pubKey, err := jwt.ParseEdPublicKeyFromPEM([]byte(certs["ed25519_public_key"]))
+	var claims Claims
+	claims.Username = "saml"
+	claims.Password = "saml"
+	claims.ExpiresAt = jwt.NewNumericDate(time.Now().Add(24 * time.Hour))
+
+	jwtToken := jwt.NewWithClaims(&jwt.SigningMethodEd25519{}, claims)
+	token, err := jwtToken.SignedString(privKey)
 	if err != nil {
-		t.Fatalf("Failed to parse public key %v", err)
+		t.Fatalf("Failed to sign jwt token %v", err)
 	}
 
-	_ = privKey
-	_ = pubKey
+	// Token validator expects a single method for signing keys (rsa256)
+	// Here, the key was signed with a different algorithm, thus the token validation should fail.
+	tokenValidator := JWTValidator{}
+	err = tokenValidator.ValidateToken(token)
+
+	if !strings.Contains(err.Error(), "unexpected signing method") {
+		t.Errorf("Error mismatch")
+	}
 }
