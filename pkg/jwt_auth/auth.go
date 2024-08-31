@@ -7,7 +7,6 @@ import (
 	"encoding/pem"
 	"fmt"
 	"os"
-	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 
@@ -56,11 +55,11 @@ func (v *JWTValidator) ValidateToken(tokenString string) error {
 	return nil
 }
 
-type JWTClaims struct {
+type Claims struct {
 	// We use username and password, but it could be anything,
 	// for example a project name, namespace etc.
-	Username string `json:"username,omitempty"`
-	Password string `json:"password,omitempty"`
+	Username string `json:"user,omitempty"`
+	Password string `json:"pwd,omitempty"`
 
 	jwt.RegisteredClaims
 }
@@ -69,19 +68,10 @@ type JWTAuthManager struct {
 	Token string
 }
 
-func NewJWTAuthManager(privateKeyPath string) (*JWTAuthManager, error) {
+func NewJWTAuthManager(privateKeyPath string, claims *Claims) (*JWTAuthManager, error) {
 	jwtPrivateKeyContents, err := os.ReadFile(privateKeyPath)
 	if err != nil {
 		log.Logger.Fatal("Failed to read jwt private key file %v", err)
-	}
-
-	claims := JWTClaims{
-		// NOTE: These should come from environment variables
-		Username: "saml",
-		Password: "saml",
-		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)), // expires in 24h
-		},
 	}
 
 	// NOTE: Instead of parsing manually, jwt could parse a private key for us.

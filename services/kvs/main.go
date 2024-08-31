@@ -9,7 +9,9 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	jwtauth "github.com/isnastish/kvs/pkg/jwt_auth"
 	"github.com/isnastish/kvs/pkg/kvs"
 	"github.com/isnastish/kvs/pkg/log"
@@ -54,7 +56,15 @@ func main() {
 	}
 
 	///////////////////////////////////////////////////////////////////////////////
-	jwtAuthManager, err := jwtauth.NewJWTAuthManager(*jwtPrivateKey)
+	claims := jwtauth.Claims{
+		Username: "saml",
+		Password: "saml",
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)), // expires in 24h
+		},
+	}
+
+	jwtAuthManager, err := jwtauth.NewJWTAuthManager(*jwtPrivateKey, &claims)
 	if err != nil {
 		log.Logger.Fatal("Failed to create jwt authentication manager %v", err)
 	}
