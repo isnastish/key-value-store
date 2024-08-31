@@ -1,6 +1,8 @@
 package jwtauth
 
 import (
+	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -56,5 +58,18 @@ func TestExpiredToken(t *testing.T) {
 
 	if !strings.Contains(err.Error(), "token is expired") {
 		t.Errorf("Token expired expected, got %v", err)
+	}
+}
+
+func TestUnknownSigningMethod(t *testing.T) {
+	certBytes, err := os.ReadFile("./jwt_certs.json")
+	if err != nil {
+		t.Fatalf("Failed to read certs file %v", err)
+	}
+
+	var certs map[string]string
+	err = json.Unmarshal(certBytes, &certs)
+	if err != nil {
+		t.Fatalf("Failed to unmarshal json %v", err)
 	}
 }
