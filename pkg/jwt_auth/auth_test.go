@@ -2,6 +2,7 @@ package jwtauth
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -10,18 +11,38 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
+var certs map[string]string
+
+func TestMain(m *testing.M) {
+	certBytes, err := os.ReadFile("jwt_test_certs.json")
+	if err != nil {
+		fmt.Printf("Failed to read certificates file %v\n", err)
+		os.Exit(1)
+	}
+
+	err = json.Unmarshal(certBytes, &certs)
+	if err != nil {
+		fmt.Printf("Failed to unmarshal json %v\n", err)
+		os.Exit(1)
+	}
+
+	status := m.Run()
+
+	os.Exit(status)
+}
+
 func TestValidToken(t *testing.T) {
 	var claims Claims
 	claims.Username = "saml"
 	claims.Password = "saml"
 	claims.ExpiresAt = jwt.NewNumericDate(time.Now().Add(24 * time.Hour))
 
-	jwtAuthManager, err := NewAuthManagerFromFile("../../certs/jwt_private.pem", &claims)
+	jwtAuthManager, err := NewAuthManagerFromBytes([]byte(certs["rsa_private_key"]), &claims)
 	if err != nil {
 		t.Fatalf("Failed to create auth manager %v", err)
 	}
 
-	texistenValidator, err := NewTokenValidator("../../certs/jwt_public.pem")
+	texistenValidator, err := NewTokenValidatorFromBytes([]byte(certs["rsa_public_key"]))
 	if err != nil {
 		t.Fatalf("Failed to create texisten validator %v", err)
 	}
@@ -38,12 +59,12 @@ func TestExpiredToken(t *testing.T) {
 	claims.Password = "saml"
 	claims.ExpiresAt = jwt.NewNumericDate(time.Now().Add(3 * time.Second))
 
-	jwtAuthManager, err := NewAuthManagerFromFile("../../certs/jwt_private.pem", &claims)
+	jwtAuthManager, err := NewAuthManagerFromBytes([]byte(certs["rsa_private_key"]), &claims)
 	if err != nil {
 		t.Fatalf("Failed to create auth manager %v", err)
 	}
 
-	texistenValidator, err := NewTokenValidator("../../certs/jwt_public.pem")
+	texistenValidator, err := NewTokenValidatorFromBytes([]byte(certs["rsa_public_key"]))
 	if err != nil {
 		t.Fatalf("Failed to create token validator %v", err)
 	}
@@ -56,23 +77,12 @@ func TestExpiredToken(t *testing.T) {
 		t.Fatalf("Error is expected %v", err)
 	}
 
-	if !strings.Contains(err.Error(), "texisten is expired") {
+	if !strings.Contains(err.Error(), "token is expired") {
 		t.Errorf("Token expired expected, got %v", err)
 	}
 }
 
 func TestUnknownSigningMethod(t *testing.T) {
-	certBytes, err := os.ReadFile("./jwt_certs.json")
-	if err != nil {
-		t.Fatalf("Failed to read certs file %v", err)
-	}
-
-	var certs map[string]string
-	err = json.Unmarshal(certBytes, &certs)
-	if err != nil {
-		t.Fatalf("Failed to unmarshal json %v", err)
-	}
-
 	privKey, err := jwt.ParseEdPrivateKeyFromPEM([]byte(certs["ed25519_private_key"]))
 	if err != nil {
 		t.Fatalf("Failed to parse private key %v", err)

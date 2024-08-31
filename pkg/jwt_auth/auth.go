@@ -23,17 +23,22 @@ type JWTValidator struct {
 	key crypto.PublicKey
 }
 
-func NewTokenValidator(publicKeyPath string) (*JWTValidator, error) {
-	keyBytes, err := os.ReadFile(publicKeyPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read public key file %v", err)
-	}
-	pubKey, err := jwt.ParseRSAPublicKeyFromPEM(keyBytes)
+func NewTokenValidatorFromBytes(publicKeyBytes []byte) (*JWTValidator, error) {
+	pubKey, err := jwt.ParseRSAPublicKeyFromPEM(publicKeyBytes)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse public key %v", err)
 	}
 
 	return &JWTValidator{key: pubKey}, nil
+}
+
+func NewTokenValidatorFromFile(publicKeyPath string) (*JWTValidator, error) {
+	keyBytes, err := os.ReadFile(publicKeyPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read public key file %v", err)
+	}
+
+	return NewTokenValidatorFromBytes(keyBytes)
 }
 
 func (v *JWTValidator) ValidateToken(tokenString string) error {

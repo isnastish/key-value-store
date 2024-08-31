@@ -48,7 +48,7 @@ func readTransactionsStremInterceptor(srv interface{}, ss grpc.ServerStream,
 
 	// NOTE: The problem here is that we parse the file which contains a public key every time an RPC is invoked,
 	// but instead we should do it only once.
-	tokenValidator, err := jwtauth.NewTokenValidator("../../certs/jwt_public.pem")
+	tokenValidator, err := jwtauth.NewTokenValidatorFromFile("../../certs/jwt_public.pem")
 	if err != nil {
 		log.Logger.Error("Failed to create token validator %v", err)
 		return status.Errorf(codes.Unauthenticated, fmt.Sprintf("failed to create token validator %v", err))
