@@ -37,6 +37,8 @@ func TestMain(m *testing.M) {
 }
 
 func transactionsEqual(a, b *apitypes.Transaction) (bool, error) {
+	// The reason why we have to check each field manually is because
+	// reflect.DeepEqual doesn't work with time. It cannot be compared.
 	if a.StorageType != b.StorageType {
 		return false, fmt.Errorf("Storage type mismatch: Expected: %v\n Received: %v\n", a.StorageType, b.StorageType)
 	}
