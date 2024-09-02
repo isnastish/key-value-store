@@ -13,8 +13,8 @@ import (
 )
 
 const postgresPort = 5050
-const postgresPwd = "12345"
-const postgresUrl = "postgresql://postgres:12345@localhost:5050/postgres?sslmode=disable"
+
+var postgresUrl = fmt.Sprintf("postgresql://postgres:saml@localhost:%d/postgres?sslmode=disable", postgresPort)
 
 func TestMain(m *testing.M) {
 	var tearDown bool
@@ -27,7 +27,7 @@ func TestMain(m *testing.M) {
 		os.Exit(exitCode)
 	}()
 
-	tearDown, err := testsetup.StartPostgresContainer(5050, "12345")
+	tearDown, err := testsetup.StartPostgresContainer(postgresPort)
 	if err != nil {
 		fmt.Printf("Failed to start Postgres container %v\n", err)
 		os.Exit(1)
@@ -101,7 +101,7 @@ func TestIntTransactions(t *testing.T) {
 		logger.WriteTransaction(txn)
 	}
 
-	// wait a bit before reading
+	// wait a bit before reading transactions
 	<-time.After(300 * time.Millisecond)
 	verifyTransactions(t, logger, list)
 
@@ -155,9 +155,3 @@ func TestStringTransactions(t *testing.T) {
 
 	logger.WriteTransaction(&apitypes.Transaction{Timestamp: time.Now(), StorageType: apitypes.StorageString, TxnType: apitypes.TransactionDel, Key: "teststringkey"})
 }
-
-// // map transactions
-// mapData := map[string]string{"testkey1": "data1", "testkey2": "data2", "testkey3": "data3"}
-// transactList = append(transactList, &apitypes.Transaction{Timestamp: time.Now(), StorageType: apitypes.StorageMap, TxnType: apitypes.TransactionPut, Key: "testmapkey", Data: mapData})
-// transactList = append(transactList, &apitypes.Transaction{Timestamp: time.Now(), StorageType: apitypes.StorageMap, TxnType: apitypes.TransactionGet, Key: "testmapkey"})
-// transactList = append(transactList, &apitypes.Transaction{Timestamp: time.Now(), StorageType: apitypes.StorageMap, TxnType: apitypes.TransactionDel, Key: "testmapkey"})
