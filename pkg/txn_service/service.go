@@ -509,29 +509,48 @@ func (l *PostgresTransactionLogger) insertTransaction(dbConn *pgxpool.Conn, tran
 		}
 
 	case apitypes.StorageMap:
-		// Deletion from map table is a bit involved
-		if keyId, err = l.insertTransactionKey(dbConn, transact, "map_keys"); err != nil {
-			return err
-		}
-		rows, _ := dbConn.Query(context.Background(),
-			`INSERT INTO "map_transactions" ("timestamp", "transaction_type", "key_id") VALUES ($1, $2, $3) RETURNING "id";`,
-			transact.Timestamp, apitypes.TransactionTypeName[int32(transact.TxnType)], *keyId,
-		)
-		transactId, err := pgx.CollectOneRow(rows, pgx.RowTo[int32])
-		if err != nil {
-			return fmt.Errorf("failed to query map transaction id %v", err)
-		}
-		if transact.Data != nil {
-			batch := &pgx.Batch{}
-			for key, value := range transact.Data.(map[string]string) {
-				batch.Queue(
-					`INSERT INTO "map_key_value_pairs" ("transaction_id", "map_key_id", "key", "value") 
-								VALUES ($1, $2, $3, $4);`,
-					transactId, *keyId, key, value)
-			}
-			err = dbConn.SendBatch(context.Background(), batch).Close()
+		if transact.TxnType == apitypes.TransactionDel {
+			// Delete key from a table of keys, retuning its id.
+			rows, _ := dbConn.Query(context.Background(), `DELETE FROM "map_keys" WHERE "key" = ($1) RETURNING "id";`, transact.Key)
+			deletedKeyId, err := pgx.CollectOneRow(rows, pgx.RowTo[int32])
 			if err != nil {
-				return fmt.Errorf("failed to insert into map key value pairs table %v", err)
+				return fmt.Errorf("failed to delete key %s, error %v", transact.Key, err)
+			}
+
+			// Remove all key-value pairs from map values table.
+			_, err = dbConn.Exec(context.Background(), `DELETE FROM "map_key_value_pairs" WHERE "map_key_id" = ($1);`, deletedKeyId)
+			if err != nil {
+				return fmt.Errorf("failed to delete key-value pairs with key %s, error %v", transact.Key, err)
+			}
+
+			// Remove all the transactions from transaction table
+			dbConn.Exec(context.Background(), `DELETE FROM "map_transactions" WHERE :w
+			`)
+
+		} else {
+			if keyId, err = l.insertTransactionKey(dbConn, transact, "map_keys"); err != nil {
+				return err
+			}
+			rows, _ := dbConn.Query(context.Background(),
+				`INSERT INTO "map_transactions" ("timestamp", "transaction_type", "key_id") VALUES ($1, $2, $3) RETURNING "id";`,
+				transact.Timestamp, apitypes.TransactionTypeName[int32(transact.TxnType)], *keyId,
+			)
+			transactId, err := pgx.CollectOneRow(rows, pgx.RowTo[int32])
+			if err != nil {
+				return fmt.Errorf("failed to query map transaction id %v", err)
+			}
+			if transact.Data != nil {
+				batch := &pgx.Batch{}
+				for key, value := range transact.Data.(map[string]string) {
+					batch.Queue(
+						`INSERT INTO "map_key_value_pairs" ("transaction_id", "map_key_id", "key", "value") 
+								VALUES ($1, $2, $3, $4);`,
+						transactId, *keyId, key, value)
+				}
+				err = dbConn.SendBatch(context.Background(), batch).Close()
+				if err != nil {
+					return fmt.Errorf("failed to insert into map key value pairs table %v", err)
+				}
 			}
 		}
 	}
