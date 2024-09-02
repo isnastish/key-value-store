@@ -523,9 +523,9 @@ func (l *PostgresTransactionLogger) insertTransaction(dbConn *pgxpool.Conn, tran
 				return fmt.Errorf("failed to delete key-value pairs with key %s, error %v", transact.Key, err)
 			}
 
+			// TODO: Finish deleting transactions.
 			// Remove all the transactions from transaction table
-			dbConn.Exec(context.Background(), `DELETE FROM "map_transactions" WHERE :w
-			`)
+			dbConn.Exec(context.Background(), `DELETE FROM "map_transactions" WHERE`)
 
 		} else {
 			if keyId, err = l.insertTransactionKey(dbConn, transact, "map_keys"); err != nil {
