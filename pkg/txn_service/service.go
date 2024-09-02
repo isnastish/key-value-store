@@ -510,7 +510,11 @@ func (l *PostgresTransactionLogger) insertTransaction(dbConn *pgxpool.Conn, tran
 
 	case apitypes.StorageMap:
 		if transact.TxnType == apitypes.TransactionDel {
-			// Delete key from a table of keys, retuning its id.
+			// NOTE: For map delete transactions we should remove all the prior transactions
+			// with the same key from the database, since they will be obsolete,
+			// meaning that when restoring the storage, the key will be deleted with the final transaction,
+			// so there is no need to modify the storage somehow based on all the previous transactions.
+			// And, this way we save memory in a database by removing obsolete transactions.
 			rows, _ := dbConn.Query(context.Background(), `DELETE FROM "map_keys" WHERE "key" = ($1) RETURNING "id";`, transact.Key)
 			deletedKeyId, err := pgx.CollectOneRow(rows, pgx.RowTo[int32])
 			if err != nil {
@@ -523,9 +527,11 @@ func (l *PostgresTransactionLogger) insertTransaction(dbConn *pgxpool.Conn, tran
 				return fmt.Errorf("failed to delete key-value pairs with key %s, error %v", transact.Key, err)
 			}
 
-			// TODO: Finish deleting transactions.
 			// Remove all the transactions from transaction table
-			dbConn.Exec(context.Background(), `DELETE FROM "map_transactions" WHERE`)
+			_, err = dbConn.Exec(context.Background(), `DELETE FROM "map_transactions" WHERE "key_id" = ($1);`, keyId)
+			if err != nil {
+				return fmt.Errorf("failed to delete map transactions %v", err)
+			}
 
 		} else {
 			if keyId, err = l.insertTransactionKey(dbConn, transact, "map_keys"); err != nil {
