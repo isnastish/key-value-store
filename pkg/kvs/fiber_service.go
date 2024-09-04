@@ -8,5 +8,14 @@ type FiberService struct {
 }
 
 func NewFiberService() *FiberService {
-	return nil
+	service := &FiberService{}
+
+	// Init storage
+	service.storage[apitypes.StorageInt] = newIntStorage()
+	service.storage[apitypes.StorageUint] = newUintStorage()
+	service.storage[apitypes.StorageFloat] = newFloatStorage()
+	service.storage[apitypes.StorageString] = newStrStorage()
+	service.storage[apitypes.StorageMap] = newMapStorage()
+
+	return service
 }
