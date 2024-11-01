@@ -806,7 +806,6 @@ func (s *Service) Run() error {
 
 				err := writeTransactionStream.Send(protoTransaction)
 				if err != nil {
-					// TODO: Think more how to handle it best.
 					log.Logger.Error("kvs: failed to send a transaction %v", err)
 					s.Close()
 					return
