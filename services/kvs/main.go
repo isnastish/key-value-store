@@ -94,6 +94,10 @@ func main() {
 
 	kvsService := kvs.NewService(&settings, txnClient)
 
+	//////////////////////////////////////////////////////////////////
+	// Testing Fiber service
+	fiberService := kvs.NewFiberService()
+
 	doneChan := make(chan bool, 1)
 	osSigChan := make(chan os.Signal, 1)
 
@@ -101,6 +105,9 @@ func main() {
 
 	go func() {
 		defer close(doneChan)
+		// TODO: Handle errors from fiber service
+		_ = fiberService.Serve()
+
 		err := kvsService.Run()
 		if err != nil {
 			log.Logger.Error("Service terminated with an error %v", err)
@@ -112,5 +119,6 @@ func main() {
 
 	<-osSigChan
 	kvsService.Close()
+	fiberService.Close()
 	<-doneChan
 }
