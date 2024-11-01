@@ -1,3 +1,6 @@
+# NOTE: rebuild all docker images and run docker compose:
+# docker compose up --build --force-recreate --no-deps (rebuilds all the services) 
+
 services:
   kvs:
     container_name: "kvs-service"
@@ -10,6 +13,8 @@ services:
       # locahost has to be specified, otherwise some weird things happening, 
       # only occasionally I can reach the endpoint from outside, using other clients (python for example).
       - "127.0.0.1:8080:8080"
+      # this is reserved for fiber service
+      # - "127.0.0.1:8080:4000"
     depends_on:
       - transaction-service
     networks:
