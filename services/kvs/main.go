@@ -92,7 +92,9 @@ func main() {
 
 	txnClient := api.NewTransactionServiceClient(grpcClient)
 
+	// TODO: Remove this once the migration to fiber is done
 	kvsService := kvs.NewService(&settings, txnClient)
+	_ = kvsService
 
 	//////////////////////////////////////////////////////////////////
 	// Testing Fiber service
@@ -105,10 +107,12 @@ func main() {
 
 	go func() {
 		defer close(doneChan)
-		// TODO: Handle errors from fiber service
-		_ = fiberService.Serve()
 
-		err := kvsService.Run()
+		// TODO: Handle errors from fiber service
+		// For now it should be executed in a separte go routine,
+		// since we won't be able to run kvsService
+		err = fiberService.Serve()
+		// err := kvsService.Run()
 		if err != nil {
 			log.Logger.Error("Service terminated with an error %v", err)
 			close(osSigChan)
@@ -118,7 +122,7 @@ func main() {
 	}()
 
 	<-osSigChan
-	kvsService.Close()
+	// kvsService.Close()
 	fiberService.Close()
 	<-doneChan
 }

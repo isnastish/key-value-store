@@ -9,7 +9,6 @@ import (
 
 	"github.com/isnastish/kvs/pkg/apitypes"
 	"github.com/isnastish/kvs/pkg/log"
-	info "github.com/isnastish/kvs/pkg/serviceinfo"
 )
 
 type FiberService struct {
@@ -19,7 +18,9 @@ type FiberService struct {
 }
 
 func NewFiberService() *FiberService {
-	service := &FiberService{}
+	service := &FiberService{
+		storage: make(map[apitypes.TransactionStorageType]Storage),
+	}
 
 	// Init storage
 	service.storage[apitypes.StorageInt] = newIntStorage()
@@ -32,6 +33,9 @@ func NewFiberService() *FiberService {
 	service.app = fiber.New(
 		fiber.Config{
 			ServerHeader: "fiber",
+			// NOTE: Setting this to true causes fiber
+			// server to fail running dockerized
+			// Prefork:      true,
 		},
 	)
 
@@ -39,19 +43,37 @@ func NewFiberService() *FiberService {
 }
 
 func (s *FiberService) Serve() error {
-	route := fmt.Sprintf("/%s/%s/uint/{key:[0-9A-Za-z_]+}", info.ServiceName(), info.ServiceVersion())
 
-	log.Logger.Info("Running fiber service")
+	// add a couple of testing routes
+	s.app.Get("/about", func(ctx *fiber.Ctx) error {
+		log.Logger.Info("route: /about")
 
-	s.app.Get(route, func(ctx *fiber.Ctx) error {
+		aboutHTMLPage := `
+		<div>
+			<h1>This is my about page</h1>
+		</div>
+		`
+
+		return ctx.SendString(aboutHTMLPage)
+	})
+
+	s.app.Get("/simple/route", func(ctx *fiber.Ctx) error {
+		log.Logger.Info("Enpoint was triggered")
 		return ctx.SendString("<h1>Hello world from Fiber</h1>")
 	})
 
 	s.running = true
 
-	if err := s.app.Server().ListenAndServe("0.0.0.0:4000"); err != nil {
-		return fmt.Errorf("fiber: failed to listen on port 0.0.0.0:4000")
+	log.Logger.Info("Fiber service is running on port: %s", "0.0.0.0:8080")
+
+	// This has to be executed in a separate goroutine
+	if err := s.app.Listen(":8080"); err != nil {
+		return fmt.Errorf("fiber: failed to listen on port :8080 %v", err)
 	}
+
+	// if err := s.app.Server().ListenAndServe("127.0.0.1:8080"); err != nil {
+	// 	return fmt.Errorf("fiber: failed to listen on port 0.0.0.0:4000")
+	// }
 
 	return nil
 }
